@@ -1,3 +1,8 @@
+20010528:
+- semantic fix for option -p to be consistend with buffer
+- bugfix: for dropped blocks in multi-volumen code
+- fix for lockup if SIG_BRK is sent during a volume request
+
 20010518:
 - Bugfix: multi volume output now should work
 	  (bugreport by Dan Hollis)

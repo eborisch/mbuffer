@@ -25,7 +25,7 @@ int Blocksize = 10240, Nooverwrite = O_EXCL, Numblocks = 256;
 #ifdef EXPERIMENTAL
 int Multivolume = 0;
 #endif
-sem_t Dev2Buf,Buf2Dev;
+sem_t Dev2Buf,Buf2Dev,Percentage;
 FILE *Log = 0, *Terminal = 0;
 struct timeb Starttime;
 
@@ -192,9 +192,10 @@ void requestInputVolume()
 
 void inputThread()
 {
-	int at = 0, err, num;
+	int at = 0, err, num, perc, fill;
 
 	infomsg("inputThread: starting...\n");
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,0);
 	while (!Finish) {
 		debugmsg("inputThread: wait\n");
 		sem_wait(&Dev2Buf);
@@ -216,6 +217,7 @@ void inputThread()
 				Rest = num;
 				debugmsg("inputThread: last block has %i bytes\n",Rest);
 				sem_post(&Buf2Dev);
+				sem_post(&Percentage);
 				infomsg("inputThread: exiting...\n");
 				pthread_exit(0);
 			} 
@@ -223,11 +225,20 @@ void inputThread()
 		} while (num < Blocksize);
 		debugmsg("inputThread: post\n");
 		sem_post(&Buf2Dev);
+		sem_getvalue(&Buf2Dev,&fill);
+		if (((float) fill / (float) Numblocks) >= Start) {
+			sem_getvalue(&Percentage,&perc);
+			if (!perc) {
+				infomsg("\ninputThread: percentage reached - restarting output...\n");
+				sem_post(&Percentage);
+			}
+		}
 		at++;
 		if (at == Numblocks)
 			at = 0;
 		Numin++;
 	}
+	sem_post(&Percentage);
 	infomsg("inputThread: exiting...");
 }
 
@@ -257,22 +268,18 @@ void outputThread()
 {
 	int at = 0, err, fill, num, rest;
 	
-	if (Start) {
-		infomsg("outputThread: waiting for buffer...\n");
-		do {
-			usleep(100000);
-			sem_getvalue(&Buf2Dev,&fill);
-		} while (((float) fill / (float) Numblocks) < Start);
-	}
-	fill = -1;
 	infomsg("\noutputThread: starting...\n");
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS,0);
 	while (1) {
 		debugmsg("outputThread: wait\n");
+		sem_getvalue(&Buf2Dev,&fill);
+		if (Start && (!fill))
+			sem_wait(&Percentage);
 		sem_wait(&Buf2Dev);
 		num = 0;
 		if (Finish) {
-			sem_getvalue(&Buf2Dev,&fill);
 			debugmsg("outputThread: inputThread finished, %i blocks remaining\n",fill);
+			sem_getvalue(&Buf2Dev,&fill);
 			if ((0 == Rest) && (0 == fill)) {
 				infomsg("outputThread: finished - exiting...\n");
 				pthread_exit((void *) 0);
@@ -284,7 +291,7 @@ void outputThread()
 		rest = Blocksize;
 		do {
 			debugmsg("outputThread: write %i\n",-num);
-			err = write(Out,Buffer[at++] + num, Outsize > rest ? Outsize : rest );
+			err = write(Out,Buffer[at] + num, Outsize > rest ? Outsize : rest );
 #ifdef EXPERIMENTAL
 			if ((-1 == err) && (Terminal) && ((errno == ENOMEM) || (errno == ENOSPC))) {
 				requestOutputVolume();
@@ -301,6 +308,7 @@ void outputThread()
 			if (Pause)
 				usleep(Pause);
 		} while (rest > 0);
+		at++;
 		if (Finish && (0 == fill)) {
 			infomsg("syncing...\n");
 			fsync(Out);
@@ -526,6 +534,8 @@ int main(int argc, char **argv)
 	if (0 != sem_init(&Buf2Dev,0,0))
 		fatal("Error creating semaphore: %s\n",strerror(errno));
 	if (0 != sem_init(&Dev2Buf,0,Numblocks))
+		fatal("Error creating semaphore: %s\n",strerror(errno));
+	if (0 != sem_init(&Percentage,0,0))
 		fatal("Error creating semaphore: %s\n",strerror(errno));
 
 	debugmsg("opening streams...\n");

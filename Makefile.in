@@ -20,7 +20,7 @@ $(TARGET): $(OBJECTS)
 	$(CC) $(LDFLAGS) $(LIBS) $< -o $@
 
 clean:
-	$(RM) -f *.o
+	$(RM) -f *.o core
 
 distclean: clean
 	$(RM) -f $(TARGET) config.h config.cache config.log \
