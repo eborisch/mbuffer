@@ -167,7 +167,7 @@ void statusThread()
 		last.millitm = now.millitm;
 		total = (Numout * Blocksize) >> 10;
 		fill = (fill < 0) ? 0 : fill;
-		fprintf(Terminal,"\rin at %8.1f kB/sec - out at %8.1f kB/sec - %Lu kB totally transfered - buffer %3.0f%% full",in,out,total,fill);
+		fprintf(Terminal,"\r%8.1f kB/s in - %8.1f kB/s out - %Lu kB total - buffer %3.0f%% full",in,out,total,fill);
 		fflush(Terminal);
 		usleep(500000);
 		sem_getvalue(&Buf2Dev,&rest);
@@ -192,9 +192,10 @@ void statusThread()
 #ifdef MULTIVOLUME
 void requestInputVolume()
 {
+	debugmsg("requesting new volume for input\n");
 	close(In);
 	do {
-		fprintf(Terminal,"\ninsert next volume...");
+		fprintf(Terminal,"\ninsert next volume and press return to continue...");
 		fflush(Terminal);
 		tcflush(fileno(Terminal),TCIFLUSH);
 		fgetc(Terminal);
@@ -203,6 +204,7 @@ void requestInputVolume()
 	} while (In == -1);
 	Multivolume--;
 	fprintf(Terminal,"\nOK - continuing...");
+	fflush(Terminal);
 }
 #endif
 
@@ -226,7 +228,10 @@ void inputThread()
 #endif
 			if (-1 == err) {
 				errormsg("inputThread: error reading: %s\n",strerror(errno));
-				sem_post(&Buf2Dev);
+				if (num) {
+					Rest = num;
+					sem_post(&Buf2Dev);
+				}
 				sem_post(&Percentage);
 				Finish = 1;
 				infomsg("inputThread: exiting...\n");
@@ -310,7 +315,7 @@ void outputThread()
 		rest = Blocksize;
 		do {
 			debugmsg("outputThread: write %i\n",-num);
-			/* use Outsize which is the blocksize of the device */
+			/* use Outsize which could be the blocksize of the device (option -d) */
 			err = write(Out,Buffer[at] + num, rest > Outsize ? Outsize : rest );
 #ifdef MULTIVOLUME
 			if ((-1 == err) && (Terminal) && ((errno == ENOMEM) || (errno == ENOSPC))) {
@@ -345,7 +350,6 @@ void outputThread()
 }
 
 #ifdef EXPERIMENTAL
-
 void openNetworkInput(unsigned short port)
 {
 	struct sockaddr_in saddr, caddr;
@@ -408,7 +412,6 @@ void getNetVars(const char **argv, int *c, const char **server, unsigned short *
 	if (*port)
 		(*c)++;
 }
-
 #endif
 
 void version()
@@ -430,6 +433,9 @@ void usage()
 		"-m <size>  : use buffer of a total of <size> bytes\n"
 #ifdef HAVE_MMAP
 		"-t         : use memory mapped temporary file (for huge buffer)\n"
+#endif
+#ifdef HAVE_ST_BLKSIZE
+		"-d         : use blocksize of device for output\n"
 #endif
 		"-p <num>   : start writing after buffer has been filled <num>%%\n"
 		"-i <file>  : use <file> for input\n"
@@ -500,6 +506,7 @@ int main(int argc, const char **argv)
 	int c, optMset = 0, optSset = 0, optBset = 0;
 #ifdef HAVE_ST_BLKSIZE
 	struct stat st;
+	int setOutsize = 0;
 #endif
 #ifdef EXPERIMENTAL
 	unsigned short netPortIn = 0;
@@ -521,6 +528,11 @@ int main(int argc, const char **argv)
 			Numblocks = (atoi(argv[c])) ? (atoi(argv[c])) : Numblocks;
 			optBset = 1;
 			debugmsg("Numblocks set to %i\n",Numblocks);
+#ifdef HAVE_ST_BLKSIZE
+		} else if (!argcheck("-d",argv,&c)) {
+			setOutsize = 1;
+			debugmsg("setting output size according to the blocksize of the device\n");
+#endif
 		} else if (!argcheck("-v",argv,&c)) {
 			Verbose = (atoi(argv[c])) ? (atoi(argv[c])) : Verbose;
 			debugmsg("Verbose set to %i\n",Verbose);
@@ -683,19 +695,21 @@ int main(int argc, const char **argv)
 		Out = fileno(stdout);
 
 #ifdef HAVE_ST_BLKSIZE
-	debugmsg("checking blocksize for output...\n");
-	if (-1 == fstat(Out,&st))
-		fatal("could not stat output: %s\n",strerror(errno));
-	if ((st.st_mode & S_IFBLK) || (st.st_mode & S_IFCHR)) {
-		infomsg("blocksize on output device is %i\n",st.st_blksize);
-		if (Blocksize%st.st_blksize != 0)
-			warningmsg("Blocksize should be a multiple of the blocksize of the output device (is %i)!\n",st.st_blksize);
-		if (Blocksize > st.st_blksize) {
-			infomsg("setting output blocksize to %i\n",st.st_blksize);
-			Outsize = st.st_blksize;
-		}
-	} else
-		infomsg("no device on output stream\n");
+	if (setOutsize) {
+		debugmsg("checking blocksize for output...\n");
+		if (-1 == fstat(Out,&st))
+			fatal("could not stat output: %s\n",strerror(errno));
+		if ((st.st_mode & S_IFBLK) || (st.st_mode & S_IFCHR)) {
+			infomsg("blocksize on output device is %i\n",st.st_blksize);
+			if (Blocksize%st.st_blksize != 0)
+				warningmsg("Blocksize should be a multiple of the blocksize of the output device (is %i)!\n",st.st_blksize);
+			if (Blocksize > st.st_blksize) {
+				infomsg("setting output blocksize to %i\n",st.st_blksize);
+				Outsize = st.st_blksize;
+			}
+		} else
+			infomsg("no device on output stream\n");
+	}
 #endif
 
 	if (Status) {
