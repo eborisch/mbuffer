@@ -43,7 +43,7 @@ use a memory mapped temporaray file as buffer (use with huge buffers)
 as \-t but use \fIfile\fP instead
 .TP
 \fB\-d\fR
-use blocksize of device for output (needed for some devices)
+use blocksize of device for output (needed for some devices, slows output down)
 .TP 
 \fB\-p\fR <\fInum\fP>
 start writing after the buffer has been filled to \fInum\fP% (default 0 \- start at once)

@@ -1,3 +1,9 @@
+20010702:
+- corrected message for mem-allocation
+- added warning message for certain multi-volume use
+- enhanced debugging messages
+- (hopefully) last bugfix for multi-volume code
+
 20010628:
 - added Option -d to use blocksize of output device
   for write (was default behaviour, but isn't needed
