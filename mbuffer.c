@@ -20,8 +20,8 @@ int Verbose = 3, Finish = 0, In, Out, Tmp, Rest = 0, Numin = 0,
     Numout = 0, Pause = 0, Memmap = 0, Status = 1, Outsize = 0;
 float Start = 0;
 char *Tmpfile = 0, **Buffer;
-const char *Infile = 0;
-int Blocksize = 10240, Numblocks = 256;
+const char *Infile = 0, *Outfile = 0;
+int Blocksize = 10240, Nooverwrite = O_EXCL, Numblocks = 256;
 #ifdef EXPERIMENTAL
 int Multivolume = 0;
 #endif
@@ -136,7 +136,7 @@ void statusThread()
 	ftime(&Starttime);
 	last.time = Starttime.time;
 	last.millitm = Starttime.millitm;
-	usleep(1000);	// needed on alpha (stderr fails with fpe on nan)
+	usleep(1000);	/* needed on alpha (stderr fails with fpe on nan) */
 	sem_getvalue(&Buf2Dev,&rest);
 	while (!(Finish & (rest == 0))) {
 		fill = (float)rest / (float)Numblocks * 100;
@@ -174,7 +174,7 @@ void statusThread()
 }
 
 #ifdef EXPERIMENTAL
-void requestVolume()
+void requestInputVolume()
 {
 	close(In);
 	fprintf(Terminal,"\ninsert next volume...");
@@ -204,7 +204,7 @@ void inputThread()
 			err = read(In,Buffer[at] + num,Blocksize - num);
 #ifdef EXPERIMENTAL
 			if ((!err) && (Terminal) && (Multivolume)) {
-				requestVolume();
+				requestInputVolume();
 			} else
 #endif
 			if (-1 == err) {
@@ -231,16 +231,38 @@ void inputThread()
 	infomsg("inputThread: exiting...");
 }
 
+#ifdef EXPERIMENTAL
+void requestOutputVolume()
+{
+	if (!Outfile) {
+		errormsg("End of volume, but not end of input:\n"
+			"Output file must be given (option -o) for multi volume support!\n");
+		Finish = 1;
+		pthread_exit((void *) -1);
+	}
+	close(Out);
+	fprintf(Terminal,"\nvolume full - insert new media and press return whe ready...\n");
+	tcflush(fileno(Terminal),TCIFLUSH);
+	fgetc(Terminal);
+	fprintf(Terminal,"\nOK - continuing...\n");
+	if (-1 == (Out = open(Outfile,Nooverwrite|O_CREAT|O_WRONLY|O_TRUNC|O_SYNC,0666))) {
+		errormsg("error reopening output file: %s\n",strerror(errno));
+		Finish = 1;
+		pthread_exit((void *) -1);
+	}
+}
+#endif
+
 void outputThread()
 {
 	int at = 0, err, fill, num, rest;
 	
 	if (Start) {
 		infomsg("outputThread: waiting for buffer...\n");
-		while (((float) fill / (float) Numblocks) < Start) {
+		do {
 			usleep(100000);
 			sem_getvalue(&Buf2Dev,&fill);
-		}
+		} while (((float) fill / (float) Numblocks) < Start);
 	}
 	fill = -1;
 	infomsg("\noutputThread: starting...\n");
@@ -265,13 +287,7 @@ void outputThread()
 			err = write(Out,Buffer[at++] + num, Outsize > rest ? Outsize : rest );
 #ifdef EXPERIMENTAL
 			if ((-1 == err) && (Terminal) && ((errno == ENOMEM) || (errno == ENOSPC))) {
-				fsync(Out);
-				fprintf(Terminal,"\nvolume full - insert new media and press return whe ready...\n");
-				tcflush(fileno(Terminal),TCIFLUSH);
-				fgetc(Terminal);
-				fprintf(Terminal,"\nOK - continuing...\n");
-				if (-1 == lseek(Out,0,SEEK_SET))
-					errormsg("error seeking to pos 0: %s\n",strerror(errno));
+				requestOutputVolume();
 				continue;
 			} else if (-1 == err) {
 #else
@@ -300,33 +316,11 @@ void outputThread()
 	}
 }
 
-int getNumber(const char *str)
-{
-	int i;
-	char c;
-
-	switch (sscanf(str,"%i%c",&i,&c)) {
-	case 0:
-		return -1;	// error
-	case 1:
-		return i;
-	default:
-	}
-	switch (c) {
-	case 'k':
-	case 'K':
-		return i << 10;
-	case 'M':
-		return i << 20;
-	}
-	return -1;
-}
-
 void version()
 {
 	fprintf(stderr,
 		"mbuffer version "VERSION"\n"\
-		"Copyright 2001 - T. Maier-Komor\n"
+		"Copyright 2001 - T. Maier-Komor\n"\
 		"License: GPL2 - see file COPYING\n");
 	exit(0);
 }
@@ -400,8 +394,7 @@ int argcheck(const char *opt, char **argv, int *c)
 
 int main(int argc, char **argv)
 {
-	int c, nooverwrite = O_EXCL, totalmem = 0;
-	const char *outFile = 0;
+	int c, totalmem = 0;
 	int optMset = 0, optSset = 0, optBset = 0;
 #ifdef HAVE_ST_BLKSIZE
 	struct stat st;
@@ -438,8 +431,8 @@ int main(int argc, char **argv)
 			Infile = argv[c];
 			debugmsg("Infile set to %s\n",Infile);
 		} else if (!argcheck("-o",argv,&c)) {
-			outFile = argv[c];
-			debugmsg("outFile set to %s\n",outFile);
+			Outfile = argv[c];
+			debugmsg("Outfile set to %s\n",Outfile);
 		} else if (!argcheck("-T",argv,&c)) {
 			Tmpfile = argv[c];
 			Memmap = 1;
@@ -457,7 +450,7 @@ int main(int argc, char **argv)
 			debugmsg("mm set to 1\n");
 #endif
 		} else if (!strcmp("-f",argv[c])) {
-			nooverwrite = 0;
+			Nooverwrite = 0;
 			debugmsg("overwrite set to 0\n");
 		} else if (!strcmp("-q",argv[c])) {
 			debugmsg("disabling display of status\n");
@@ -511,8 +504,10 @@ int main(int argc, char **argv)
 		if (-1 == Tmp)
 			fatal("could not create temporary file (%s): %s\n",tmpfile,strerror(errno));
 		/* resize the file. Needed - at least under linux, who knows why? */
-		lseek(Tmp,Numblocks*Blocksize-sizeof(int),SEEK_SET);
-		write(Tmp,&c,sizeof(int));
+		if (-1 == lseek(Tmp,Numblocks*Blocksize-sizeof(int),SEEK_SET))
+			fatal("could not resize temporary file: %s\n",strerror(errno));
+		if (-1 == write(Tmp,&c,sizeof(int)))
+			fatal("could not resize temporary file: %s\n",strerror(errno));
 		Buffer[0] = mmap(0,Blocksize*Numblocks,PROT_READ|PROT_WRITE,MAP_PRIVATE,Tmp,0);
 		if (MAP_FAILED == Buffer[0])
 			fatal("could not map buffer-file to memory: %s\n",strerror(errno));
@@ -539,8 +534,8 @@ int main(int argc, char **argv)
 			fatal("could not open input file: %s\n",strerror(errno));
 	} else
 		In = fileno(stdin);
-	if (outFile) {
-		if (-1 == (Out = open(outFile,nooverwrite|O_CREAT|O_WRONLY|O_TRUNC,0666)))
+	if (Outfile) {
+		if (-1 == (Out = open(Outfile,Nooverwrite|O_CREAT|O_WRONLY|O_TRUNC|O_SYNC,0666)))
 			fatal("could not open output file: %s\n",strerror(errno));
 	} else
 		Out = fileno(stdout);
@@ -572,8 +567,10 @@ int main(int argc, char **argv)
 	}
 
 	debugmsg("registering signals...\n");
-	signal(SIGINT,sigHandler);
-	signal(SIGTERM,sigHandler);
+	if (SIG_ERR == signal(SIGINT,sigHandler))
+		warningmsg("error registering new SIGINT handler: %s\n",strerror(errno));
+	if (SIG_ERR == signal(SIGTERM,sigHandler))
+		warningmsg("error registering new SIGINT handler: %s\n",strerror(errno));
 
 	debugmsg("starting threads...\n");
 	pthread_create(&Reader,0,(void *(*)(void *))&inputThread,0);
