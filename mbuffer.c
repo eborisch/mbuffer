@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2014, Thomas Maier-Komor
+ *  Copyright (C) 2000-2015, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -1295,7 +1295,8 @@ static void *outputThread(void *arg)
 						haderror = 1;
 					continue;
 				}
-			} else if (-1 == num) {
+			}
+			if (-1 == num) {
 				dest->result = strerror(errno);
 				errormsg("outputThread: error writing to %s at offset 0x%llx: %s\n",dest->arg,(long long)Blocksize*Numout+blocksize-rest,strerror(errno));
 				MainOutOK = 0;
@@ -1353,7 +1354,7 @@ static void version(void)
 {
 	(void) fprintf(stderr,
 		"mbuffer version "PACKAGE_VERSION"\n"\
-		"Copyright 2001-2014 - T. Maier-Komor\n"\
+		"Copyright 2001-2015 - T. Maier-Komor\n"\
 		"License: GPLv3 - see file LICENSE\n"\
 		"This program comes with ABSOLUTELY NO WARRANTY!!!\n"
 		"Donations via PayPal to thomas@maier-komor.de are welcome and support this work!\n"
@@ -1706,7 +1707,11 @@ static void initDefaults()
 	assert(dfstr);
 	while (!feof(dfstr)) {
 		char key[64],valuestr[64];
-		fscanf(dfstr,"%255[^\n]\n",line);
+		int n = fscanf(dfstr,"%255[^\n]\n",line);
+		if (n != 1) {
+			errormsg("error parsing defaults file\n");
+			break;
+		}
 		char *pound = strchr(line,'#');
 		unsigned long long value;
 		int a;
@@ -1868,10 +1873,14 @@ int main(int argc, const char **argv)
 		const char *arg = argv[c];
 		if ((arg[0] == '-') && (arg[1] == 'v')) {
 			long verb;
-			if (arg[2])
+			if (arg[2]) {
 				verb = strtol(arg+2,0,0);
-			else
-				verb = strtol(argv[++c],0,0);
+			} else if (++c < argc) {
+				verb = strtol(argv[c],0,0);
+			} else {
+				fatal("missing argument to option -v\n");
+				break;
+			}
 			if ((verb == 0) && (errno == EINVAL))
 				errormsg("invalid argument to option -v: \"%s\"\n",argv[c]);
 			else

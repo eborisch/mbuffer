@@ -1,3 +1,7 @@
+20151002:
+- fix: SegV when argument to -v is missing
+- fix: potential infinite loop on output error
+
 20150412:
 - fix: watchdog cannot do its job if it is cleaned up to early
 - fix: clear sa_flags and sa_mask before use, although ignored
