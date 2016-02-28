@@ -1,3 +1,7 @@
+20160228:
+- fix: fix listen's backlog argument, which can cause issues on Linux 4.4
+  (patch by Matthijs van Drunen)
+
 20151002:
 - fix: SegV when argument to -v is missing
 - fix: potential infinite loop on output error

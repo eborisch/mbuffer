@@ -152,7 +152,7 @@ void initNetworkInput(const char *addr)
 	if (x == 0)
 		fatal("Unable to initialize network input.\n");
 	infomsg("listening on socket...\n");
-	if (0 > listen(sock,0))		/* accept only 1 incoming connection */
+	if (0 > listen(sock,1))		/* accept only 1 incoming connection */
 		fatal("could not listen on socket for network input: %s\n",strerror(errno));
 	for (;;) {
 		char chost[NI_MAXHOST], serv[NI_MAXSERV];
