@@ -1,3 +1,7 @@
+20160613:
+- fix: fix potential assertion triggered by interrupted system call
+- enhancement: ignore EINTR for I/O syscalls
+
 20160228:
 - fix: fix listen's backlog argument, which can cause issues on Linux 4.4
   (patch by Matthijs van Drunen)

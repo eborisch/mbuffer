@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2015, Thomas Maier-Komor
+ *  Copyright (C) 2000-2016, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -670,6 +670,31 @@ static void releaseLock(void *l)
 
 
 
+#ifndef __sun
+static void waitInput(void)
+{
+	if (Status != 0) {
+		int maxfd = TermQ[0] > In ? TermQ[0] + 1 : In + 1;
+		int err;
+
+		fd_set readfds;
+		FD_ZERO(&readfds);
+		FD_SET(TermQ[0],&readfds);
+		FD_SET(In,&readfds);
+		do {
+			err = select(maxfd,&readfds,0,0,0);
+			debugiomsg("inputThread: select(%d, {%d,%d}, 0, 0, 0) = %d\n", maxfd,In,TermQ[0],err);
+			assert((err > 0) || (errno == EBADF || errno == EINTR));
+		} while ((err < 0) && (errno == EINTR));
+		if (FD_ISSET(TermQ[0],&readfds))
+				pthread_exit((void *)-1);
+		assert(FD_ISSET(In,&readfds));
+	}
+}
+#endif
+
+
+
 static void *inputThread(void *ignored)
 {
 	int fill = 0;
@@ -678,9 +703,8 @@ static void *inputThread(void *ignored)
 	long long xfer = 0;
 	const double startread = StartRead, startwrite = StartWrite;
 	struct timespec last;
-#ifndef __sun
-	int maxfd = TermQ[0] > In ? TermQ[0] + 1 : In + 1;
 
+#ifndef __sun
 	if (Status != 0)
 		assert(TermQ[0] != -1);
 #endif
@@ -721,18 +745,7 @@ static void *inputThread(void *ignored)
 		do {
 			int in;
 #ifndef __sun
-			if (Status != 0) {
-				fd_set readfds;
-				FD_ZERO(&readfds);
-				FD_SET(TermQ[0],&readfds);
-				FD_SET(In,&readfds);
-				err = select(maxfd,&readfds,0,0,0);
-				debugiomsg("inputThread: select(%d, {%d,%d}, 0, 0, 0) = %d\n", maxfd,In,TermQ[0],err);
-				assert((err > 0) || (errno == EBADF));
-				if (FD_ISSET(TermQ[0],&readfds))
-					return (void *)-1;
-				assert(FD_ISSET(In,&readfds));
-			}
+			waitInput();
 #endif
 			in = read(In,Buffer[at] + num,Blocksize - num);
 			debugiomsg("inputThread: read(In, Buffer[%d] + %llu, %llu) = %d\n", at, num, Blocksize - num, in);
@@ -745,6 +758,8 @@ static void *inputThread(void *ignored)
 				requestInputVolume(at,num);
 			} else if (in <= 0) {
 				/* error or end-of-file */
+				if ((-1 == in) && (errno == EINTR))
+					continue;
 				if ((-1 == in) && (Terminate == 0))
 					errormsg("inputThread: error reading at offset 0x%llx: %s\n",Numin*Blocksize,strerror(errno));
 				Rest = num;
@@ -935,6 +950,8 @@ static void *senderThread(void *arg)
 				debugiomsg("sender(%s): writing %llu@0x%p: ret = %d\n",dest->arg,rest,(void*)baddr,ret);
 			}
 			if (-1 == ret) {
+				if (errno == EINTR)
+					continue;
 				errormsg("error writing to %s: %s\n",dest->arg,strerror(errno));
 				dest->result = strerror(errno);
 				terminateSender(out,dest,1);
@@ -1297,6 +1314,8 @@ static void *outputThread(void *arg)
 				}
 			}
 			if (-1 == num) {
+				if (errno == EINTR)
+					continue;
 				dest->result = strerror(errno);
 				errormsg("outputThread: error writing to %s at offset 0x%llx: %s\n",dest->arg,(long long)Blocksize*Numout+blocksize-rest,strerror(errno));
 				MainOutOK = 0;
@@ -1354,7 +1373,7 @@ static void version(void)
 {
 	(void) fprintf(stderr,
 		"mbuffer version "PACKAGE_VERSION"\n"\
-		"Copyright 2001-2015 - T. Maier-Komor\n"\
+		"Copyright 2001-2016 - T. Maier-Komor\n"\
 		"License: GPLv3 - see file LICENSE\n"\
 		"This program comes with ABSOLUTELY NO WARRANTY!!!\n"
 		"Donations via PayPal to thomas@maier-komor.de are welcome and support this work!\n"
