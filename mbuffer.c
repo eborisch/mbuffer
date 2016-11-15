@@ -136,7 +136,7 @@ static long
 	Tmp = -1,
 	OptSync = 0;
 static unsigned long
-	Outsize = 10240, Pause = 0, Timeout = 0;
+	Outsize = 10240, Timeout = 0;
 static volatile int
 	Terminate = 0,	/* abort execution, because of error or signal */
 	EmptyCount = 0,	/* counter incremented when buffer runs empty */
@@ -145,10 +145,10 @@ static volatile int
 	Done = 0,
 	MainOutOK = 1;	/* is the main outputThread still writing or just coordinating senders */
 static unsigned long long
-	Totalmem = 0, PgSz = 0, NumP = 0, Blocksize = 10240,
+	Totalmem = 0, PgSz = 0, NumP = 0, Blocksize = 10240, Pause = 0,
 	MaxReadSpeed = 0, MaxWriteSpeed = 0, OutVolsize = 0;
 static volatile unsigned long long
-	Rest = 0, Numin = 0, Numout = 0;
+	Rest = 0, Numin = 0, Numout = 0, InSize = 0;
 static double
 	StartWrite = 0, StartRead = 1;
 static char
@@ -330,7 +330,7 @@ static RETSIGTYPE sigHandler(int signr)
 /* Thread-safe replacement for usleep. Argument must be a whole
  * number of microseconds to sleep.
  */
-static int mt_usleep(unsigned long sleep_usecs)
+static int mt_usleep(unsigned long long sleep_usecs)
 {
 	struct timespec tv;
 	tv.tv_sec = sleep_usecs / 1000000;
@@ -351,8 +351,13 @@ static int mt_usleep(unsigned long sleep_usecs)
 static void *watchdogThread(void *ignored)
 {
 	unsigned long ni = Numin, no = Numout;
+	unsigned long long timeout = Timeout * 1000000LL;
 	for (;;) {
-		sleep(Timeout);
+		mt_usleep(timeout);
+		if (WatchdogRaised) {
+			errormsg("watchdog timeout: SIGINT had no effect; sending SIGKILL\n");
+			kill(getpid(),SIGKILL);
+		}
 		if ((ni == Numin) && (Finish == -1)) {
 			errormsg("watchdog timeout: input stalled; sending SIGINT\n");
 			WatchdogRaised = 1;
@@ -449,6 +454,10 @@ static void statusThread(void)
 			b += sprintf(b,"B/s, ");
 		b += kb2str(b,total);
 		b += sprintf(b,"B total, buffer %3.0f%% full",fill);
+		if (InSize != 0) {
+			double done = (double)Numout*Blocksize/(double)InSize*100;
+			b += sprintf(b,", %3.0f%% done",done);
+		}
 		if (Quiet == 0) {
 #ifdef NEED_IO_INTERLOCK
 			if (Log == STDERR_FILENO) {
@@ -1752,12 +1761,12 @@ static void initDefaults()
 				debugmsg("Numblocks = %llu\n",Numblocks);
 			}
 		} else if (strcasecmp(key,"pause") == 0) {
-			long p = strtol(valuestr,0,0);
+			long long p = strtoll(valuestr,0,0);
 			if ((p == 0) && (errno == EINVAL)) {
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			} else {
 				Pause = p;
-				debugmsg("Pause = %d\n",Pause);
+				debugmsg("Pause = %lldusec\n",Pause);
 			}
 		} else if (strcasecmp(key,"autoloadtime") == 0) {
 			long at = strtol(valuestr,0,0) - 1;
@@ -1789,7 +1798,7 @@ static void initDefaults()
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			else {
 				Timeout = t;
-				debugmsg("Timeout = %lu\n",Timeout);
+				debugmsg("Timeout = %lu sec.\n",Timeout);
 			}
 		} else if (strcasecmp(key,"showstatus") == 0) {
 			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0)) {
@@ -1864,7 +1873,8 @@ static void initDefaults()
 
 int main(int argc, const char **argv)
 {
-	int optMset = 0, optSset = 0, optBset = 0, optMode = O_EXCL, numOut = 0;
+	int optMode = O_EXCL;
+	int optMset = 0, optSset = 0, optBset = 0, numOut = 0, watchdogStarted = 0;
 	int  numstdout = 0, numthreads = 0;
 	long mxnrsem;
 	int c, fl, err;
@@ -1979,12 +1989,12 @@ int main(int argc, const char **argv)
 			/* has been parsed already */
 		} else if (!argcheck("-u",argv,&c,argc)) {
 
-			long p = strtol(argv[c],0,0);
+			long long p = strtoll(argv[c],0,0);
 			if ((p == 0) && (errno == EINVAL))
 				errormsg("invalid argument to option -u: \"%s\"\n",argv[c]);
 			else
 				Pause = p;
-			debugmsg("Pause = %d\n",Pause);
+			debugmsg("Pause = %lldusec\n",Pause);
 		} else if (!argcheck("-r",argv,&c,argc)) {
 			MaxReadSpeed = calcint(argv,c,0);
 			debugmsg("MaxReadSpeed = %lld\n",MaxReadSpeed);
@@ -2130,6 +2140,10 @@ int main(int argc, const char **argv)
 				fatal("invalid argument to option -W\n");
 			if (Timeout <= AutoloadTime)
 				fatal("timeout must be bigger than autoload time\n");
+			err = pthread_create(&Watchdog,0,&watchdogThread,(void*)0);
+			assert(0 == err);
+			infomsg("started watchdog with Timeout = %lu sec.\n",Timeout);
+			watchdogStarted = 1;
 		} else if (!strcmp("--direct",argv[c])) {
 #ifdef O_DIRECT
 			debugmsg("using O_DIRECT to open file descriptors\n");
@@ -2344,6 +2358,9 @@ int main(int argc, const char **argv)
 			if (-1 == In)
 				fatal("could not open input file: %s\n",strerror(errno));
 		}
+		struct stat st;
+		if ((0 == fstat(In,&st)) && ((st.st_mode & S_IFMT) == S_IFREG))
+			InSize = st.st_size;
 	} else if (In == -1) {
 		In = STDIN_FILENO;
 	}
@@ -2485,12 +2502,13 @@ int main(int argc, const char **argv)
 		TermQ[0] = -1;
 		TermQ[1] = -1;
 	}
-	err = pthread_create(&dest->thread,0,&outputThread,dest);
-	assert(0 == err);
-	if (Timeout) {
+	if (!watchdogStarted && Timeout) {
 		err = pthread_create(&Watchdog,0,&watchdogThread,(void*)0);
 		assert(0 == err);
+		infomsg("started watchdog with Timeout = %lu sec.\n",Timeout);
 	}
+	err = pthread_create(&dest->thread,0,&outputThread,dest);
+	assert(0 == err);
 	if (Status) {
 		err = pthread_create(&Reader,0,&inputThread,0);
 		assert(0 == err);

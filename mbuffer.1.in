@@ -171,7 +171,10 @@ checks weather I/O activity has stalled. If either channel has stalled
 for a complete period, the watchdog writes an error message and
 terminates mbuffer via SIGINT. Be aware that the watchdog is unaware of
 tape-change activities. So choose the watchdog timeout greater that the
-worst-case tape-change time.
+worst-case tape-change time. The watchdog is activated with parsing
+option -W or after parsing all options. To avoid that the watchdog will
+trigger during network initialization, put the option -W after -I and
+-O.
 .SH "DEFAULT VALUES"
 The default values for following options can be set as \fIkey = value\fP pairs
 in the ~/.mbuffer.rc file:

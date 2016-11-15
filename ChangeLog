@@ -1,3 +1,20 @@
+20161115:
+- enhancement: report percent done, when input size is known (is a file)
+- enhancement: watchdog raises SIGKILL if SIGINT had no effect
+- change: start watchdog when parsing option -W or after parsing all
+          options when activated via defaults file
+  => Originally the watchdog was started after output to make sure
+     output initialization doesn't unintentionally trigger the watchdog
+     due to delays with a manual setup on the receiving side in a
+     network situation.
+  => This behavior limits potential benefits when mbuffer is used in an 
+     automated environment where output initialization might fail and
+     the watchdog would be of use.
+  => To avoid triggering the watchdog during network initialization, put
+     the watchdog option -W after network options -O and -I.
+- fix: use thread-safe mt_usleep instead of sleep(3) for watchdog timing
+- change: adjusted interface of mt_usleep to accept 64bit arguments
+
 20160613:
 - fix: fix potential assertion triggered by interrupted system call
 - enhancement: ignore EINTR for I/O syscalls
