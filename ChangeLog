@@ -1,3 +1,16 @@
+20170514:
+- update: configure update for latest cygwin
+- fix: detect missing md5.h in configure
+- enhancement: adjust some messages to avoid line-wrapping
+- enhancement: print status message to log if suppressed on console
+- enhancement: also read config files in /etc and ${prefix}/etc
+- enhancement: simplified memory conifguration detection scheme
+- added an example config file, with documentation of all options
+- added parameter StatusInterval
+- fix for handling empty lines in config files
+- fix: --append rejects existing files
+- fix warnings related to thread status return code
+
 20161115:
 - enhancement: report percent done, when input size is known (is a file)
 - enhancement: watchdog raises SIGKILL if SIGINT had no effect

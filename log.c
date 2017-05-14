@@ -112,6 +112,37 @@ void infomsg(const char *msg, ...)
 }
 
 
+void statusmsg(const char *msg, ...)
+{
+	if (Verbose >= 3) {
+		va_list val;
+		char buf[256], *b = buf + PrefixLen;
+		size_t s;
+
+		va_start(val,msg);
+		(void) memcpy(buf,Prefix,PrefixLen);
+		b += vsnprintf(b,sizeof(buf)-(b-buf),msg,val);
+		s = b - buf;
+		assert(s < sizeof(buf));
+#ifdef NEED_IO_INTERLOCK
+		if (s <= PIPE_BUF) {
+			(void) write(Log,buf,s);
+		} else {
+			int err;
+			err = pthread_mutex_lock(&LogMut);
+			assert(err == 0);
+			(void) write(Log,buf,s);
+			err = pthread_mutex_unlock(&LogMut);
+			assert(err == 0);
+		}
+#else
+		(void) write(Log,buf,s);
+#endif
+		va_end(val);
+	}
+}
+
+
 void warningmsg(const char *msg, ...)
 {
 	if (Verbose >= 3) {

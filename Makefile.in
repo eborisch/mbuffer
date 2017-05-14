@@ -1,10 +1,11 @@
 CC		= @CC@
-DEFS		= @DEFS@
+DEFS		= @DEFS@ -DPREFIX=\"${prefix}\"
 CFLAGS		= @CFLAGS@ $(DEFS) -I@srcdir@ -I.
 LDFLAGS		= @LDFLAGS@
 LIBS		= @LIBS@
 EXE		= @EXEEXT@
 SHELL		= /bin/sh
+CP		= @CP@
 
 VPATH		= @srcdir@
 prefix		= @prefix@
@@ -39,10 +40,11 @@ distclean: clean
 	config.status Makefile mbuffer.1 core
 
 install: $(TARGET)
-	-$(INSTALL) -d $(DESTDIR)$(bindir)
-	$(INSTALL) $(TARGET) $(DESTDIR)$(bindir)
-	-$(INSTALL) -d $(DESTDIR)$(mandir)
-	$(INSTALL) mbuffer.1 $(DESTDIR)$(mandir)
+	-$(INSTALL) -d $(bindir)
+	$(INSTALL) $(TARGET) $(bindir)
+	-$(INSTALL) -d $(mandir)
+	$(INSTALL) mbuffer.1 $(mandir)
+	$(CP) -n mbuffer.rc $(prefix)/etc
 
 lint:
 	lint $(DEFS) $(SOURCES)

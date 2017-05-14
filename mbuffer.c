@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2016, Thomas Maier-Komor
+ *  Copyright (C) 2000-2017, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -67,7 +67,7 @@ typedef int caddr_t;
 #ifdef HAVE_LIBMHASH
 #include <mhash.h>
 #define HAVE_MD5 1
-#elif defined HAVE_LIBMD5
+#elif defined HAVE_LIBMD5 && defined HAVE_MD5_H
 #include <md5.h>
 static MD5_CTX MD5ctxt;
 #define MD5_INIT(ctxt)		MD5Init(&ctxt);
@@ -170,6 +170,9 @@ static long long
 
 static clockid_t
 	ClockSrc = CLOCK_REALTIME;
+
+static float
+	StatusInterval = 0.5;
 
 #ifdef __sun
 #include <synch.h>
@@ -384,10 +387,14 @@ static void statusThread(void)
 	unsigned long long lin = 0, lout = 0;
 	int unwritten = 1;	/* assumption: initially there is at least one unwritten block */
  	fd_set readfds;
- 	struct timeval timeout = {0,200000};
+ 	struct timeval timeout;
 	int maxfd = 0;
+	long tsec,tusec;
   
 	last = Starttime;
+	tsec = (long)StatusInterval;
+	tusec = (long)((StatusInterval-tsec)*1E6);
+	debugmsg("timeout init: %f => %ld : %ld\n",StatusInterval,tsec,tusec);
 #ifdef __alpha
 	(void) mt_usleep(1000);	/* needed on alpha (stderr fails with fpe on nan) */
 #endif
@@ -413,8 +420,8 @@ static void statusThread(void)
 		ssize_t nw = 0;
 		char buf[256], *b = buf;
 
- 		timeout.tv_sec = 0;
- 		timeout.tv_usec = 500000;
+ 		timeout.tv_sec = tsec;
+ 		timeout.tv_usec = tusec;
 		FD_ZERO(&readfds);
 		if (TermQ[0] != -1)
 			FD_SET(TermQ[0],&readfds);
@@ -472,7 +479,7 @@ static void statusThread(void)
 				nw = write(STDERR_FILENO,buf,strlen(buf));
 		}
 		if ((StatusLog != 0) && (Log != STDERR_FILENO))
-			infomsg("%s\n",buf+1);
+			statusmsg("%s\n",buf+1);
 		err = pthread_mutex_unlock(&TermMut);
 		assert(0 == err);
 		if (nw == -1)	/* stop trying to print status messages after a write error */
@@ -784,8 +791,8 @@ static void *inputThread(void *ignored)
 				assert(err == 0);
 				infomsg("inputThread: exiting...\n");
 				if (Status)
-					pthread_exit((void *) in);
-				return (void *) in;
+					pthread_exit((void *)(ptrdiff_t) in);
+				return (void *)(ptrdiff_t) in;
 			}
 		} while (num < Blocksize);
 		if (MaxReadSpeed)
@@ -882,7 +889,7 @@ static inline void terminateSender(int fd, dest_t *d, int ret)
 		ret = syncSenders(0,-1);
 		debugmsg("terminateSender(%s): sendSender(0,-1) = %d\n",d->arg,ret);
 	}
-	pthread_exit((void *) ret);
+	pthread_exit((void *)(ptrdiff_t) ret);
 }
 
 
@@ -1168,7 +1175,7 @@ static void terminateOutputThread(dest_t *d, int status)
 		(void) pthread_cond_broadcast(&SendCond);
 	}
 	Done = 1;
-	pthread_exit((void *)status);
+	pthread_exit((void *)(ptrdiff_t) status);
 }
 
 
@@ -1382,7 +1389,7 @@ static void version(void)
 {
 	(void) fprintf(stderr,
 		"mbuffer version "PACKAGE_VERSION"\n"\
-		"Copyright 2001-2016 - T. Maier-Komor\n"\
+		"Copyright 2001-2017 - T. Maier-Komor\n"\
 		"License: GPLv3 - see file LICENSE\n"\
 		"This program comes with ABSOLUTELY NO WARRANTY!!!\n"
 		"Donations via PayPal to thomas@maier-komor.de are welcome and support this work!\n"
@@ -1473,7 +1480,7 @@ static unsigned long long calcint(const char **argv, int c, unsigned long long d
 	
 	switch (sscanf(argv[c],"%lf%c",&d,&ch)) {
 	default:
-		assert(0);
+		abort();
 		break;
 	case 2:
 		if (d <= 0)
@@ -1632,7 +1639,7 @@ static const char *calcval(const char *arg, unsigned long long *res)
 	
 	switch (sscanf(arg,"%lf%c",&d,&ch)) {
 	default:
-		assert(0);
+		abort();
 		break;
 	case 2:
 		if (d <= 0)
@@ -1686,59 +1693,39 @@ static const char *calcval(const char *arg, unsigned long long *res)
 }
 
 
-static void initDefaults()
+static void readConfigFile(const char *cfname)
 {
-#ifdef PATH_MAX
-	char dfname[PATH_MAX+1];
-#else
-	char dfname[1024];
-#endif
-	char line[256];
-	const char *home = getenv("HOME");
-	size_t l;
 	int df;
 	FILE *dfstr;
 	struct stat st;
 
-	if (home == 0) {
-		warningmsg("HOME environment variable not set - unable to find defaults file\n");
-		return;
-	}
-	strncpy(dfname,home,sizeof(dfname)-1);
-	dfname[sizeof(dfname)-1] = 0;
-	l = strlen(dfname);
-	if (l + 12 > PATH_MAX) {
-		warningmsg("path to defaults file breaks PATH_MAX\n");
-		return;
-	}
-	strcat(dfname,"/.mbuffer.rc");
-	df = open(dfname,O_RDONLY);
+	df = open(cfname,O_RDONLY);
 	if (df == -1) {
 		if (errno == ENOENT)
-			infomsg("no defaults file ~/.mbuffer.rc\n");
+			infomsg("no config file %s\n",cfname);
 		else
-			warningmsg("error opening defaults file %s: %s\n",dfname,strerror(errno));
+			warningmsg("error opening config file %s: %s\n",cfname,strerror(errno));
 		return;
 	}
 	if (-1 == fstat(df,&st)) {
-		warningmsg("unable to stat defaults file %s: %s\n",dfname,strerror(errno));
+		warningmsg("unable to stat config file %s: %s\n",cfname,strerror(errno));
 		close(df);
 		return;
 	}
-	if (getuid() != st.st_uid) {
-		warningmsg("ignoring defaults file from different user\n");
+	if ((getuid() != st.st_uid) && (st.st_uid != 0)) {
+		warningmsg("ignoring config file '%s' from different user\n",cfname);
 		close(df);
 		return;
 	}
-	infomsg("reading defaults file %s\n",dfname);
+	infomsg("reading config file %s\n",cfname);
 	dfstr = fdopen(df,"r");
 	assert(dfstr);
 	while (!feof(dfstr)) {
-		char key[64],valuestr[64];
+		char line[256],key[64],valuestr[64];
 		int n = fscanf(dfstr,"%255[^\n]\n",line);
 		if (n != 1) {
-			errormsg("error parsing defaults file\n");
-			break;
+			fscanf(dfstr,"\n");
+			continue;
 		}
 		char *pound = strchr(line,'#');
 		unsigned long long value;
@@ -1746,7 +1733,7 @@ static void initDefaults()
 
 		if (pound)
 			*pound = 0;
-		a = sscanf(line,"%63[A-Za-z]%*[ \t=:]%63[0-9a-zA-Z]",key,valuestr);
+		a = sscanf(line,"%63[A-Za-z]%*[ \t=:]%63[0-9a-zA-Z.]",key,valuestr);
 		if (a != 2) {
 			warningmsg("unable to parse line '%s' in .mbuffer.rc; %d arguments\n",line,a);
 			continue;
@@ -1801,73 +1788,109 @@ static void initDefaults()
 				debugmsg("Timeout = %lu sec.\n",Timeout);
 			}
 		} else if (strcasecmp(key,"showstatus") == 0) {
-			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0)) {
+			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0)) {
 				Quiet = 0;
 				debugmsg("showstatus = yes\n");
-			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0)) {
+			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0)) {
 				Quiet = 1;
 				debugmsg("showstatus = no\n");
 			} else 
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			continue;
 		} else if (strcasecmp(key,"logstatus") == 0) {
-			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0)) {
+			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0)) {
 				StatusLog = 1;
 				debugmsg("logstatus = yes\n");
-			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0)) {
+			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0)) {
 				StatusLog = 0;
 				debugmsg("logstatus = no\n");
 			} else 
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			continue;
 		} else if (strcasecmp(key,"memlock") == 0) {
-			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0)) {
+			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0)) {
 				Memlock = 1;
 				debugmsg("Memlock = %lu\n",Memlock);
-			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0)) {
+			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0)) {
 				Memlock = 0;
 				debugmsg("Memlock = %lu\n",Memlock);
 			} else 
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			continue;
 		} else if (strcasecmp(key,"printpid") == 0) {
-			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0)) {
+			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0)) {
 				printmsg("PID is %d\n",getpid());
-			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0)) {
+			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0)) {
 			} else 
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
+			continue;
+		} else if (strcasecmp(key,"StatusInterval") == 0) {
+			StatusInterval = strtof(valuestr,0);
+			debugmsg("StatusInterval = %f\n",StatusInterval);
 			continue;
 		}
 		const char *argerror = calcval(valuestr,&value);
 		if (argerror) {
-			warningmsg("ignoring key/value pair from defaults file (%s = %s): %s\n",key,valuestr,argerror);
+			warningmsg("ignoring key/value pair (%s = %s): %s\n",key,valuestr,argerror);
 			continue;
 		}
 		if (strcasecmp(key,"blocksize") == 0) {
 			Blocksize = value;
+			debugmsg("Blocksize = %lu\n",Blocksize);
 		} else if (strcasecmp(key,"maxwritespeed") == 0) {
 			MaxWriteSpeed = value;
+			debugmsg("MaxWriteSpeed = %lu\n",MaxWriteSpeed);
 		} else if (strcasecmp(key,"maxreadspeed") == 0) {
 			MaxReadSpeed = value;
+			debugmsg("MaxReadSpeed = %lu\n",MaxReadSpeed);
 		} else if (strcasecmp(key,"Totalmem") == 0) {
 			if (value < 100) {
-#if defined(_SC_AVPHYS_PAGES) && defined(_SC_PAGESIZE) && !defined(__CYGWIN__) || defined(__FreeBSD__)
-				Totalmem = ((unsigned long long) NumP * PgSz * value) / 100 ;
-				debugmsg("Totalmem = %lluk\n",Totalmem>>10);
-#else
-				warningmsg("Unable to determine page size or amount of available memory - please specify an absolute amount of memory.\n");
-#endif
+				if (NumP && PgSz)
+					Totalmem = ((unsigned long long) NumP * PgSz * value) / 100 ;
+				else
+					warningmsg("Unable to determine page size or amount of available memory - please specify an absolute amount of memory.\n");
+			} else {
+				Totalmem = value;
 			}
+			debugmsg("Totalmem = %lluk\n",Totalmem>>10);
 		} else if (strcasecmp(key,"tcpbuffer") == 0) {
 			TCPBufSize = value;
+			debugmsg("TCPBufSize = %lu\n",TCPBufSize);
 		} else {
-			warningmsg("unknown key: %s\n",key);
-			continue;
+			warningmsg("unknown parameter: %s\n",key);
 		}
-		infomsg("setting %s to %lld\n",key,value);
 	}
 	fclose(dfstr);
 	close(df);
+}
+
+
+static void initDefaults()
+{
+#ifdef PATH_MAX
+	char dfname[PATH_MAX+1];
+#else
+	char dfname[1024];
+#endif
+	const char *home = getenv("HOME");
+	size_t l;
+
+	if (home == 0) {
+		warningmsg("HOME environment variable not set - unable to find defaults file\n");
+		return;
+	}
+	strncpy(dfname,home,sizeof(dfname)-1);
+	dfname[sizeof(dfname)-1] = 0;
+	l = strlen(dfname);
+	if (l + 12 > PATH_MAX) {
+		warningmsg("path to defaults file breaks PATH_MAX\n");
+		return;
+	}
+	strcat(dfname,"/.mbuffer.rc");
+
+	readConfigFile("/etc/mbuffer.rc");
+	readConfigFile(PREFIX "/etc/mbuffer.rc");
+	readConfigFile(dfname);
 }
 
 
@@ -1920,20 +1943,34 @@ int main(int argc, const char **argv)
 	
 	/* gather system parameters */
 	TickTime = 1000000 / sysconf(_SC_CLK_TCK);
-#if defined(_SC_AVPHYS_PAGES) && defined(_SC_PAGESIZE) && !defined(__CYGWIN__)
-	PgSz = sysconf(_SC_PAGESIZE);
-	assert(PgSz > 0);
+#if defined(_SC_AVPHYS_PAGES) //&& !defined(__CYGWIN__)
 	NumP = sysconf(_SC_AVPHYS_PAGES);
-	assert(NumP > 0);
-	Blocksize = PgSz;
-	debugmsg("total # of phys pages: %li (pagesize %li)\n",NumP,PgSz);
-	Numblocks = NumP/50;
+	if (NumP < 0) {
+		warningmsg("unable to determine number of available memory pages: %s\n",strerror(errno));
+		NumP = 0;
+	} else {
+		debugmsg("total # of phys pages: %li\n",NumP);
+	}
 #elif defined(__FreeBSD__)
 	size_t nump_size = sizeof(nump_size);
 	sysctlbyname("hw.availpages", &NumP, &nump_size, NULL, 0);
-	PgSz = sysconf(_SC_PAGESIZE);
-	assert(PgSz > 0);
 #endif
+
+#ifdef _SC_PAGESIZE
+	PgSz = sysconf(_SC_PAGESIZE);
+	if (PgSz < 0) {
+		warningmsg("unable to determine system pagesize: %s\n",strerror(errno));
+		PgSz = 0;
+	}
+#endif
+
+	if (NumP && PgSz) {
+		Blocksize = PgSz;
+		debugmsg("Blocksize set to physical page size of %u bytes\n",PgSz);
+		Numblocks = NumP/50;
+		debugmsg("set Numblocks to %u\n",Numblocks);
+	}
+
 #if defined(_POSIX_MONOTONIC_CLOCK) && (_POSIX_MONOTONIC_CLOCK >= 0) && defined(CLOCK_MONOTONIC)
 	if (sysconf(_SC_MONOTONIC_CLOCK) > 0)
 		ClockSrc = CLOCK_MONOTONIC;
@@ -1951,6 +1988,7 @@ int main(int argc, const char **argv)
 				fatal("cannot set blocksize as percentage of total physical memory\n");
 		} else if (!strcmp("--append",argv[c])) {
 			optMode |= O_APPEND;
+			optMode &= ~O_EXCL;
 			debugmsg("append to next file\n");
 		} else if (!strcmp("--truncate",argv[c])) {
 			optMode |= O_TRUNC;
@@ -2389,7 +2427,6 @@ int main(int argc, const char **argv)
 		fatal("no output left - nothing to do\n");
 	}
 
-	debugmsg("checking if we have a controlling terminal...\n");
 	sig.sa_handler = SIG_IGN;
 	sigemptyset(&sig.sa_mask);
 	sig.sa_flags = 0;
@@ -2409,6 +2446,11 @@ int main(int argc, const char **argv)
 			err = dup2(tty,STDERR_FILENO);
 			assert(err != -1);
 		}
+	}
+	if (Terminal) {
+		debugmsg("found controlling terminal\n");
+	} else {
+		debugmsg("no access to controlling terminal available\n");
 	}
 	err = fcntl(STDERR_FILENO,F_SETFL,fl);
 	assert(err == 0);
@@ -2461,14 +2503,14 @@ int main(int argc, const char **argv)
 	if (-1 == fstat(dest->fd,&st))
 		errormsg("could not stat output: %s\n",strerror(errno));
 	else if (S_ISBLK(st.st_mode) || S_ISCHR(st.st_mode)) {
-		infomsg("blocksize is %d bytes on output device\n",st.st_blksize);
 		if (Blocksize % st.st_blksize != 0) {
-			warningmsg("Blocksize should be a multiple of the blocksize of the output device!\n"
-				"This can cause problems with some device/OS combinations...\n"
-				"Blocksize on output device is %d (transfer block size is %lld)\n", st.st_blksize, Blocksize);
+			warningmsg("Block size is not a multiple of native output size.\n");
+			infomsg("output device's native block-size is %d bytes\n",st.st_blksize);
+			infomsg("transfer block size is %lld\n", Blocksize);
 			if (SetOutsize)
 				fatal("unable to set output blocksize\n");
 		} else {
+			infomsg("output device's native block-size is %d bytes\n",st.st_blksize);
 			if (SetOutsize) {
 				infomsg("setting output blocksize to %d\n",st.st_blksize);
 				Outsize = st.st_blksize;
@@ -2480,11 +2522,13 @@ int main(int argc, const char **argv)
 	if (-1 == fstat(In,&st))
 		warningmsg("could not stat input: %s\n",strerror(errno));
 	else if (S_ISBLK(st.st_mode) || S_ISCHR(st.st_mode)) {
-		infomsg("blocksize is %d bytes on input device\n",st.st_blksize);
 		if (Blocksize % st.st_blksize != 0) {
-			warningmsg("Blocksize should be a multiple of the blocksize of the input device!\n"
-				"Use option -s to adjust transfer block size if you get an out-of-memory error on input.\n"
-				"Blocksize on input device is %d (transfer block size is %lld)\n", st.st_blksize, Blocksize);
+			warningmsg("Block size is not a multiple of native input size.\n");
+			infomsg("input device's native block-size is %d bytes\n",st.st_blksize);
+			infomsg("transfer block size is %lld\n", Blocksize);
+			infomsg("Adjust block size (option -s) if you get out-of-memory on input.\n");
+		} else {
+			infomsg("input device's native block-size is %d bytes\n",st.st_blksize);
 		}
 	} else
 		infomsg("no device on input stream\n");
@@ -2493,7 +2537,7 @@ int main(int argc, const char **argv)
 		   "This can result in incorrect written data when\n"
 		   "using multiple volumes. Continue at your own risk!\n");
 #endif
-	if (((Verbose < 4) || (StatusLog == 0)) && (Quiet != 0))
+	if (((Verbose < 3) || (StatusLog == 0)) && (Quiet != 0))
 		Status = 0;
 	if (Status) {
 		if (-1 == pipe(TermQ))

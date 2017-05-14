@@ -35,6 +35,7 @@
 /* md5hashing is enabled by default, 
    default is libmhash fallback is libmd5 */
 #undef HAVE_LIBMHASH
+#undef HAVE_MD5_H
 #undef HAVE_LIBMD5
 #undef HAVE_LIBCRYPTO
 
