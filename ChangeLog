@@ -1,3 +1,8 @@
+20170515:
+- fix false warning on comments in config files
+- code update for config parsing
+- makefile compatibility update
+
 20170514:
 - update: configure update for latest cygwin
 - fix: detect missing md5.h in configure

@@ -48,6 +48,7 @@ typedef int caddr_t;
 #include <sys/time.h>
 #include <termios.h>
 #include <unistd.h>
+#include <stddef.h>
 
 
 #ifdef __FreeBSD__
@@ -217,6 +218,7 @@ static volatile int SendSize = 0, ActSenders = 0;
 #define assert(x) ((x) || (*(char *) 0 = 1))
 #endif
 
+typedef enum { off, on, invalid } flag_t;
 
 
 static int kb2str(char *s, double v)
@@ -1682,8 +1684,6 @@ static const char *calcval(const char *arg, unsigned long long *res)
 	case 1:
 		if (d <= 0)
 			return "value out of range";
-		if (d <= 100)
-			return "value out of range";
 		*res = d;
 		return 0;
 	case 0:
@@ -1693,11 +1693,33 @@ static const char *calcval(const char *arg, unsigned long long *res)
 }
 
 
+static int isEmpty(const char *l)
+{
+	while (*l) {
+		if ((*l != ' ') && (*l != '\t'))
+			return 0;
+		++l;
+	}
+	return 1;
+}
+
+
+flag_t parseFlag(const char *valuestr)
+{
+	if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0))
+		return on;
+	else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0))
+		return off;
+	else 
+		return invalid;
+}
+
+
 static void readConfigFile(const char *cfname)
 {
-	int df;
-	FILE *dfstr;
+	int df,lineno = 0;
 	struct stat st;
+	char *cfdata, *line;
 
 	df = open(cfname,O_RDONLY);
 	if (df == -1) {
@@ -1718,26 +1740,38 @@ static void readConfigFile(const char *cfname)
 		return;
 	}
 	infomsg("reading config file %s\n",cfname);
-	dfstr = fdopen(df,"r");
-	assert(dfstr);
-	while (!feof(dfstr)) {
-		char line[256],key[64],valuestr[64];
-		int n = fscanf(dfstr,"%255[^\n]\n",line);
-		if (n != 1) {
-			fscanf(dfstr,"\n");
-			continue;
+	cfdata = malloc(st.st_size+1);
+	int n = read(df,cfdata,st.st_size);
+	close(df);
+	if (n < 0) {
+		warningmsg("error reading %s: %s\n",cfname,strerror(errno));
+		return;
+	}
+	cfdata[n] = 0;
+	line = cfdata;
+	while (line && *line) {
+		char key[64],valuestr[64];
+		int a;
+		++lineno;
+		char *nl = strchr(line,'\n');
+		if (nl) {
+			*nl = 0;
+			++nl;
 		}
 		char *pound = strchr(line,'#');
-		unsigned long long value;
-		int a;
-
 		if (pound)
 			*pound = 0;
-		a = sscanf(line,"%63[A-Za-z]%*[ \t=:]%63[0-9a-zA-Z.]",key,valuestr);
-		if (a != 2) {
-			warningmsg("unable to parse line '%s' in .mbuffer.rc; %d arguments\n",line,a);
+		if (isEmpty(line)) {
+			line = nl;
 			continue;
 		}
+		a = sscanf(line,"%63[A-Za-z]%*[ \t=:]%63[0-9a-zA-Z.]",key,valuestr);
+		if (a != 2) {
+			warningmsg("config file %s, line %d: error parsing '%s'\n",cfname,lineno,line);
+			line = nl;
+			continue;
+		}
+		line = nl;
 		debugmsg("parsing key/value pair %s=%s\n",key,valuestr);
 		if (strcasecmp(key,"numblocks") == 0) {
 			long nb = strtol(valuestr,0,0);
@@ -1788,80 +1822,91 @@ static void readConfigFile(const char *cfname)
 				debugmsg("Timeout = %lu sec.\n",Timeout);
 			}
 		} else if (strcasecmp(key,"showstatus") == 0) {
-			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0)) {
+			switch (parseFlag(valuestr)) {
+			case on:
 				Quiet = 0;
 				debugmsg("showstatus = yes\n");
-			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0)) {
+				break;
+			case off:
 				Quiet = 1;
 				debugmsg("showstatus = no\n");
-			} else 
+				break;
+			default:
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			continue;
+			}
 		} else if (strcasecmp(key,"logstatus") == 0) {
-			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0)) {
+			switch (parseFlag(valuestr)) {
+			case on:
 				StatusLog = 1;
 				debugmsg("logstatus = yes\n");
-			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0)) {
+				break;
+			case off:
 				StatusLog = 0;
 				debugmsg("logstatus = no\n");
-			} else 
+				break;
+			default:
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			continue;
+			}
 		} else if (strcasecmp(key,"memlock") == 0) {
-			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0)) {
+			switch (parseFlag(valuestr)) {
+			case on:
 				Memlock = 1;
 				debugmsg("Memlock = %lu\n",Memlock);
-			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0)) {
+				break;
+			case off:
 				Memlock = 0;
 				debugmsg("Memlock = %lu\n",Memlock);
-			} else 
+				break;
+			default:
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			continue;
+			}
 		} else if (strcasecmp(key,"printpid") == 0) {
-			if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0)) {
+			switch (parseFlag(valuestr)) {
+			case on:
 				printmsg("PID is %d\n",getpid());
-			} else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0)) {
-			} else 
+				break;
+			case off:
+				/* don't do anything */
+				break;
+			default:
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			continue;
+			}
 		} else if (strcasecmp(key,"StatusInterval") == 0) {
 			StatusInterval = strtof(valuestr,0);
 			debugmsg("StatusInterval = %f\n",StatusInterval);
-			continue;
-		}
-		const char *argerror = calcval(valuestr,&value);
-		if (argerror) {
-			warningmsg("ignoring key/value pair (%s = %s): %s\n",key,valuestr,argerror);
-			continue;
-		}
-		if (strcasecmp(key,"blocksize") == 0) {
-			Blocksize = value;
-			debugmsg("Blocksize = %lu\n",Blocksize);
-		} else if (strcasecmp(key,"maxwritespeed") == 0) {
-			MaxWriteSpeed = value;
-			debugmsg("MaxWriteSpeed = %lu\n",MaxWriteSpeed);
-		} else if (strcasecmp(key,"maxreadspeed") == 0) {
-			MaxReadSpeed = value;
-			debugmsg("MaxReadSpeed = %lu\n",MaxReadSpeed);
-		} else if (strcasecmp(key,"Totalmem") == 0) {
-			if (value < 100) {
-				if (NumP && PgSz)
-					Totalmem = ((unsigned long long) NumP * PgSz * value) / 100 ;
-				else
-					warningmsg("Unable to determine page size or amount of available memory - please specify an absolute amount of memory.\n");
-			} else {
-				Totalmem = value;
-			}
-			debugmsg("Totalmem = %lluk\n",Totalmem>>10);
-		} else if (strcasecmp(key,"tcpbuffer") == 0) {
-			TCPBufSize = value;
-			debugmsg("TCPBufSize = %lu\n",TCPBufSize);
 		} else {
-			warningmsg("unknown parameter: %s\n",key);
+			unsigned long long value;
+			const char *argerror = calcval(valuestr,&value);
+			if (argerror) {
+				warningmsg("ignoring invalid key/value pair (%s = %s): %s\n",key,valuestr,argerror);
+			} else if (strcasecmp(key,"blocksize") == 0) {
+				Blocksize = value;
+				debugmsg("Blocksize = %lu\n",Blocksize);
+			} else if (strcasecmp(key,"maxwritespeed") == 0) {
+				MaxWriteSpeed = value;
+				debugmsg("MaxWriteSpeed = %lu\n",MaxWriteSpeed);
+			} else if (strcasecmp(key,"maxreadspeed") == 0) {
+				MaxReadSpeed = value;
+				debugmsg("MaxReadSpeed = %lu\n",MaxReadSpeed);
+			} else if (strcasecmp(key,"Totalmem") == 0) {
+				if (value >= 100) {
+					Totalmem = value;
+					debugmsg("Totalmem = %lluk\n",Totalmem>>10);
+				} else if (NumP && PgSz) {
+					Totalmem = ((unsigned long long) NumP * PgSz * value) / 100 ;
+					debugmsg("Totalmem = %lluk\n",Totalmem>>10);
+				} else {
+					warningmsg("Unable to determine page size or amount of available memory - please specify an absolute amount of memory.\n");
+				}
+			} else if (strcasecmp(key,"tcpbuffer") == 0) {
+				TCPBufSize = value;
+				debugmsg("TCPBufSize = %lu\n",TCPBufSize);
+			} else {
+				warningmsg("unknown parameter: %s\n",key);
+			}
 		}
 	}
-	fclose(dfstr);
-	close(df);
+	free(cfdata);
 }
 
 

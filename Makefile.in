@@ -39,12 +39,17 @@ distclean: clean
 	-$(RM) $(TARGET) config.h config.log \
 	config.status Makefile mbuffer.1 core
 
-install: $(TARGET)
-	-$(INSTALL) -d $(bindir)
-	$(INSTALL) $(TARGET) $(bindir)
-	-$(INSTALL) -d $(mandir)
-	$(INSTALL) mbuffer.1 $(mandir)
-	$(CP) -n mbuffer.rc $(prefix)/etc
+$(DESTDIR)$(prefix)/etc:
+	-$(INSTALL) -d -m 755 $@
+
+$(DESTDIR)$(prefix)/etc/mbuffer.rc:
+	$(INSTALL) -m 644 mbuffer.rc $(DESTDIR)$(prefix)/etc/
+
+install: $(TARGET) $(DESTDIR)$(prefix)/etc $(DESTDIR)$(prefix)/etc/mbuffer.rc
+	-$(INSTALL) -d -m 755 $(DESTDIR)$(bindir)
+	$(INSTALL) -m 755 $(TARGET) $(DESTDIR)$(bindir)/
+	-$(INSTALL) -d -m 755 $(DESTDIR)$(mandir)
+	$(INSTALL) -m 644 mbuffer.1 $(DESTDIR)$(mandir)/
 
 lint:
 	lint $(DEFS) $(SOURCES)
