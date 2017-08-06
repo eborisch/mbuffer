@@ -10,6 +10,10 @@
 #####################################################################
 
 
+## set verbosity
+## valid values are 0..6 or silent,fatal,error,warning,info,debug,io
+# Verbose = warning
+
 ## size of one block [kB]
 # Blocksize = 10240
 
@@ -67,3 +71,7 @@
 ## TCP transmission buffer size [bytes]
 ## 0 means: keep OS default
 # TCPbufsize = 0
+
+## tape aware out-of-space handling
+## valid values are: true, false, 0, 1, on, off
+# Tapeaware = false

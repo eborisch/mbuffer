@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2009, Thomas Maier-Komor
+ *  Copyright (C) 2000-2017, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -31,12 +31,15 @@
 extern pthread_mutex_t LogMut;
 #endif
 
-extern int Verbose, Log, ErrorOccurred, ErrorsFatal;
+typedef enum { silent = 0, fatals, errors, warnings, infos, debugs, iomsgs } verbose_t;
+
+extern verbose_t Verbose;
+extern int Log, ErrorOccurred, ErrorsFatal;
 
 #ifdef DEBUG
 void logdebug(const char *msg, ...);
-#define debugmsg if (Verbose >= 5) logdebug
-#define debugiomsg if (Verbose >= 6) logdebug
+#define debugmsg if (Verbose >= debugs) logdebug
+#define debugiomsg if (Verbose >= iomsgs) logdebug
 #elif __STDC_VERSION__ >= 199901L
 #define debugmsg(...)
 #define debugiomsg(...)
@@ -45,6 +48,7 @@ void logdebug(const char *msg, ...);
 #define debugiomsg
 #endif
 
+void setVerbose(const char *arg);
 void infomsg(const char *msg, ...);
 void statusmsg(const char *msg, ...);
 void warningmsg(const char *msg, ...);

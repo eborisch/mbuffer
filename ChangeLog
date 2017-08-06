@@ -1,3 +1,18 @@
+20170806:
+- add support for libgcrypt
+- add support for tape aware out-of-space handling
+  => ignores first out-of-space error message on every write
+  (patch by Adam Nielsen <a.nielsen@shikadi.net>)
+- support setting verbosity in config file
+- suppress gcc's unused result warnings - all have been manually checked
+- updated install-sh, config.sub, and config.guess
+- exit cleanly if all outputs failed to open but hashers are left
+- minor fixes and enhancements
+- minor code refactoring for clearer structure
+- some code hardening
+- build fix for OpenBSD
+- work around mhash_get_hash_name_static crashing
+
 20170515:
 - fix false warning on comments in config files
 - code update for config parsing

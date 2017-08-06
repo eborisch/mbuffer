@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2009, Thomas Maier-Komor
+ *  Copyright (C) 2000-2017, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -50,7 +50,7 @@ void *alloca(size_t);
 #include "log.h"
 
 extern int In;
-int32_t TCPBufSize = 1 << 20;
+int32_t TCPBufSize = (int32_t)1 << 20;
 #if defined(PF_INET6) && defined(PF_UNSPEC)
 int AddrFam = PF_UNSPEC;
 #else
@@ -58,7 +58,7 @@ int AddrFam = PF_INET;
 #endif
 
 
-static void setTCPBufferSize(int sock, unsigned buffer)
+static void setTCPBufferSize(int sock, int buffer)
 {
 	int err;
 	int32_t osize, size;
@@ -69,6 +69,7 @@ static void setTCPBufferSize(int sock, unsigned buffer)
 	assert((err == 0) && (bsize == sizeof(osize)));
 	if (osize < TCPBufSize) {
 		size = TCPBufSize;
+		assert(size > 0);
 		do {
 			err = setsockopt(sock,SOL_SOCKET,buffer,(void *)&size,sizeof(size));
 			size >>= 1;
@@ -114,7 +115,7 @@ void initNetworkInput(const char *addr)
 		hint.ai_family = AddrFam;
 		hint.ai_protocol = IPPROTO_TCP;
 		hint.ai_socktype = SOCK_STREAM;
-#ifdef __FreeBSD__
+#if defined __FreeBSD__ || defined __OpenBSD__
 		hint.ai_flags = AI_ADDRCONFIG;
 #else
 		hint.ai_flags = AI_ADDRCONFIG | AI_V4MAPPED;
@@ -206,9 +207,8 @@ dest_t *createNetworkOutput(const char *addr)
 	host = strdup(addr);
 	assert(host);
 	port = strrchr(host,':');
-	if (port == 0) {
+	if (port == 0)
 		fatal("syntax error - target must be given in the form <host>:<port>\n");
-	}
 	*port++ = 0;
 	bzero(&hint,sizeof(hint));
 	hint.ai_family = AddrFam;
@@ -226,7 +226,10 @@ dest_t *createNetworkOutput(const char *addr)
 			continue;
 		}
 		if (0 == connect(fd, x->ai_addr, x->ai_addrlen)) {
-			debugmsg("successfully connected to %s\n",addr);
+			struct sockaddr_in local_address;
+			socklen_t addr_size = sizeof(local_address);
+			getsockname(fd, (struct sockaddr *) &local_address, &addr_size);
+			infomsg("successfully connected to %s from :%d\n",addr,ntohs((&local_address)->sin_port));
 			break;
 		}
 		(void) close(fd);

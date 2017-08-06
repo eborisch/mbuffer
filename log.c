@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2009, Thomas Maier-Komor
+ *  Copyright (C) 2000-2017, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -24,6 +24,7 @@
 #endif
 
 #include <assert.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -37,7 +38,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-int Verbose = 3, Log = STDERR_FILENO, ErrorOccurred = 0, ErrorsFatal = 0;
+verbose_t Verbose = warnings;
+int Log = STDERR_FILENO, ErrorOccurred = 0, ErrorsFatal = 0;
 extern char *Prefix;
 extern size_t PrefixLen;
 
@@ -46,6 +48,28 @@ extern size_t PrefixLen;
 pthread_mutex_t
 	LogMut = PTHREAD_MUTEX_INITIALIZER;
 #endif
+
+
+void setVerbose(const char *arg)
+{
+	long l = strtol(arg,0,0);
+	if (0 == strcasecmp(arg,"fatal"))
+		Verbose = fatals;
+	else if (0 == strcasecmp(arg,"error"))
+		Verbose = errors;
+	else if (0 == strcasecmp(arg,"warning"))
+		Verbose = warnings;
+	else if (0 == strcasecmp(arg,"info"))
+		Verbose = infos;
+	else if (0 == strcasecmp(arg,"debug"))
+		Verbose = debugs;
+	else if (0 == strcasecmp(arg,"io"))
+		Verbose = iomsgs;
+	else if (((l > 0) && (l <= 6)) || ((l == 0) && (errno != EINVAL)))
+		Verbose = (verbose_t) l;
+	else
+		errormsg("invalid argument '%s' for setting verbosity level\n",arg);
+}
 
 
 #ifdef DEBUG
@@ -75,9 +99,6 @@ void logdebug(const char *msg, ...)
 #endif
 	va_end(val);
 }
-#define debugmsg if (Verbose >= 5) logdebug
-#else
-#define debugmsg
 #endif
 
 
@@ -114,7 +135,7 @@ void infomsg(const char *msg, ...)
 
 void statusmsg(const char *msg, ...)
 {
-	if (Verbose >= 3) {
+	if (Verbose >= warnings) {
 		va_list val;
 		char buf[256], *b = buf + PrefixLen;
 		size_t s;
@@ -145,7 +166,7 @@ void statusmsg(const char *msg, ...)
 
 void warningmsg(const char *msg, ...)
 {
-	if (Verbose >= 3) {
+	if (Verbose >= warnings) {
 		va_list val;
 		char buf[256], *b = buf + PrefixLen;
 		size_t s;
@@ -179,7 +200,7 @@ void warningmsg(const char *msg, ...)
 void errormsg(const char *msg, ...)
 {
 	ErrorOccurred = 1;
-	if (Verbose >= 2) {
+	if (Verbose >= errors) {
 		va_list val;
 		char buf[256], *b = buf + PrefixLen;
 		size_t s;
@@ -207,8 +228,8 @@ void errormsg(const char *msg, ...)
 #endif
 		va_end(val);
 	}
-	if (ErrorsFatal) {
-		close(Log);
+	if (ErrorsFatal != 0) {
+		(void) close(Log);
 		exit(EXIT_FAILURE);
 	}
 }
@@ -216,7 +237,7 @@ void errormsg(const char *msg, ...)
 
 void fatal(const char *msg, ...)
 {
-	if (Verbose >= 1) {
+	if (Verbose >= fatals) {
 		va_list val;
 		char buf[256], *b = buf + PrefixLen;
 		size_t s;

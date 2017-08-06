@@ -13,15 +13,16 @@ exec_prefix     = @exec_prefix@
 datarootdir	= @datarootdir@
 bindir          = @bindir@
 mandir		= @mandir@/man1
+etcdir		= @sysconfdir@
 
 RM		= @RM@
 INSTALL		= @INSTALL@
 
 TARGET		= mbuffer$(EXE)
-SOURCES		= log.c network.c mbuffer.c
+SOURCES		= log.c network.c mbuffer.c hashing.c
 OBJECTS		= $(SOURCES:.c=.o)
 
-TESTTREE	= /opt/csw/gcc4
+TESTTREE	= /usr/lib/gcc
 
 .PHONY: clean all distclean install check testcleanup
 
@@ -43,9 +44,9 @@ $(DESTDIR)$(prefix)/etc:
 	-$(INSTALL) -d -m 755 $@
 
 $(DESTDIR)$(prefix)/etc/mbuffer.rc:
-	$(INSTALL) -m 644 mbuffer.rc $(DESTDIR)$(prefix)/etc/
+	$(INSTALL) -m 644 mbuffer.rc $(DESTDIR)$(etcdir)
 
-install: $(TARGET) $(DESTDIR)$(prefix)/etc $(DESTDIR)$(prefix)/etc/mbuffer.rc
+install: $(TARGET) $(DESTDIR)$(etcdir) $(DESTDIR)$(etcdir)/mbuffer.rc
 	-$(INSTALL) -d -m 755 $(DESTDIR)$(bindir)
 	$(INSTALL) -m 755 $(TARGET) $(DESTDIR)$(bindir)/
 	-$(INSTALL) -d -m 755 $(DESTDIR)$(mandir)
@@ -54,11 +55,12 @@ install: $(TARGET) $(DESTDIR)$(prefix)/etc $(DESTDIR)$(prefix)/etc/mbuffer.rc
 lint:
 	lint $(DEFS) $(SOURCES)
 
-check: $(TARGET) test0 test1 test2 test3 testcleanup
+check: $(TARGET) test0 test1 test2 test3 test4 test5 testcleanup
 
 testcleanup:
-	rm -f test0 test1 test2 test3 test0.md5 test1.md5 test2.md5 test3.md5 \
-		test.tar test.md5
+	rm -f test0 test1 test2 test3 test4 test5 \
+		test0.md5 test1.md5 test2.md5 test3.md5 test4.md5 test5.md5 \
+		test.tar test.md5 tapetest.so
 
 test.tar:
 	tar cf test.tar $(TESTTREE)
@@ -99,7 +101,7 @@ test3: test.md5
 	./mbuffer -q -6 -I :8000 | openssl md5 > $@.md5 & \
 		sleep 1; \
 		rm -f $@.tar; \
-		./mbuffer -i test.tar -o /dev/null -6 -O localhost:8000 -o $@.tar -H; \
+		./mbuffer -i test.tar -o /dev/null -6 -O ip6-localhost:8000 -o $@.tar -H; \
 		wait
 	sync
 	diff $@.md5 test.md5
@@ -110,3 +112,25 @@ test3: test.md5
 	diff $@.md5 test.md5
 	touch $@
 
+# Multi-volume test
+test4: test.md5 tapetest.so
+	rm -f output-$@.tar.*
+	cat test.tar | LD_PRELOAD=$(PWD)/tapetest.so ./mbuffer -f -o output-$@.tar -H -A "echo '[$@] Replacing tape'"
+	cat output-$@.tar.* | openssl md5 > $@.md5
+	rm -f output-$@.tar.*
+	sync
+	diff $@.md5 test.md5
+	touch $@
+
+# Multi-volume test with --tapeaware
+test5: test.md5 tapetest.so
+	rm -f output-$@.tar.*
+	cat test.tar | LD_PRELOAD=$(PWD)/tapetest.so ./mbuffer -f -o output-$@.tar -H -A "echo '[$@] Replacing tape'" --tapeaware
+	cat output-$@.tar.* | openssl md5 > $@.md5
+	rm -f output-$@.tar.*
+	sync
+	diff $@.md5 test.md5
+	touch $@
+
+tapetest.so: tapetest.c
+	$(CC) -shared -fPIC $< -o $@ -ldl

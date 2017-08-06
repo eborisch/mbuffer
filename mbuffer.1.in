@@ -143,6 +143,15 @@ Open next output file given via option \-o in append mode.
 \fB\-\-truncate\fR
 Truncate next output file given via option \-o when opening it.
 .TP 
+\fB\-\-tapeaware\fR
+Keep writing to the very end of the tape.  LTO drives tell the OS as they
+approach the end of the tape, which Linux passes on to userspace by returning
+a 'no space left' error on every second write operation.  Normally the first of
+these errors is treated as the end of the tape and the next volume will be
+called for, however with this option, writes will continue until two in a row
+fail with 'no space left', indicating the real end of the tape.  This will allow
+a little extra data to fit on each tape.
+.TP 
 \fB\-6\fR
 Force IPv6 mode for the following network I/O options on command line.
 \fB\-4\fR
