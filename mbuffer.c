@@ -28,34 +28,20 @@ typedef int caddr_t;
 #endif
 #endif
 
-#define _GNU_SOURCE 1	/* needed for O_DIRECT */
-#include <assert.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <float.h>
 #include <libgen.h>
 #include <limits.h>
 #include <math.h>
-#include <netdb.h>
-#include <pthread.h>
-#include <semaphore.h>
 #include <signal.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <termios.h>
-#include <unistd.h>
-#include <stddef.h>
 
-
-#ifdef __FreeBSD__
-#include <sys/sysctl.h>
-#endif
 
 #ifdef HAVE_SENDFILE
 #ifdef HAVE_SENDFILE_H
@@ -67,41 +53,15 @@ typedef int caddr_t;
 #define EBADRQC EINVAL
 #endif
 
-#ifndef PATH_MAX
-#define PATH_MAX 1024
-#endif
 
-/*
- * _POSIX_THREADS is only defined if full thread support is available.
- * We don't need full thread support, so we skip this test...
- * #ifndef _POSIX_THREADS
- * #error posix threads are required
- * #endif
- */
-
-#ifndef S_SPLINT_S
-#ifndef _POSIX_SEMAPHORES
-#error posix sempahores are required
-#endif
-#endif
-
-#ifdef O_LARGEFILE
-#define LARGEFILE O_LARGEFILE
-#else
-#define LARGEFILE 0
-#endif
-
-#ifdef O_DIRECT
-#define DIRECT O_DIRECT
-#else
-#define DIRECT 0
-#endif
-
-
+#include "common.h"
 #include "dest.h"
+#include "globals.h"
 #include "hashing.h"
-#include "network.h"
+#include "input.h"
 #include "log.h"
+#include "network.h"
+#include "settings.h"
 
 /* if this sendfile implementation does not support sending from buffers,
    disable sendfile support */
@@ -112,104 +72,6 @@ typedef int caddr_t;
 #undef HAVE_SENDFILE
 #endif
 
-char
-	*Prefix;
-int 
-	In = -1, WatchdogRaised = 0;
-volatile int
-	NumSenders = -1,/* number of sender threads */
-	SendSize = 0,
-	Terminate = 0;	/* abort execution, because of error or signal */
-size_t
-	PrefixLen = 0;
-dest_t *Dest = 0;
-char *volatile SendAt = 0;
-
-
-static pthread_t
-	Reader, Watchdog;
-static long
-	Tmp = -1,
-	OptSync = 0;
-static unsigned long
-	Outsize = 10240, Timeout = 0;
-static volatile int
-	EmptyCount = 0,	/* counter incremented when buffer runs empty */
-	FullCount = 0,	/* counter incremented when buffer gets full */
-	Done = 0,
-	MainOutOK = 1;	/* is the main outputThread still writing or just coordinating senders */
-static unsigned long long
-	Totalmem = 0, PgSz = 0, NumP = 0, Blocksize = 10240, Pause = 0,
-	MaxReadSpeed = 0, MaxWriteSpeed = 0, OutVolsize = 0;
-static volatile unsigned long long
-	Rest = 0, Numin = 0, Numout = 0, InSize = 0;
-static double
-	StartWrite = 0, StartRead = 1;
-static char
-	*Tmpfile = 0, **Buffer;
-static const char
-	*Infile = 0, *AutoloadCmd = 0;
-static unsigned int
-	AutoloadTime = 0;
-static int
-	Memlock = 0, TermQ[2],
-	Memmap = 0, Quiet = 0, Status = 1, StatusLog = 1,
-	Hashers = 0, Direct = 0, SetOutsize = 0, TapeAware = 0;
-static long
-	NumVolumes = 1,		/* number of input volumes, 0 for interactive prompting */
-	Finish = -1,		/* this is for graceful termination */
-	Numblocks = 512;	/* number of buffer blocks */
-static long long
-	TickTime = 0;
-
-static clockid_t
-	ClockSrc = CLOCK_REALTIME;
-
-static float
-	StatusInterval = 0.5;
-
-#ifdef __sun
-#include <synch.h>
-#define sem_t sema_t
-#define sem_init(a,b,c) sema_init(a,c,USYNC_THREAD,0)
-#define sem_post sema_post
-#define sem_getvalue(a,b) ((*(b) = (a)->count), 0)
-#if defined(__SunOS_5_8) || defined(__SunOS_5_9)
-#define sem_wait SemWait
-int SemWait(sema_t *s)
-{
-	int err;
-	do {
-		err = sema_wait(s);
-	} while (err == EINTR);
-	return err;
-}
-#else
-#define sem_wait sema_wait
-#endif
-#endif
-
-static sem_t Dev2Buf, Buf2Dev;
-static pthread_cond_t
-	PercLow = PTHREAD_COND_INITIALIZER,	/* low watermark */
-	PercHigh = PTHREAD_COND_INITIALIZER,	/* high watermark */
-	SendCond = PTHREAD_COND_INITIALIZER;
-static pthread_mutex_t
-	TermMut = PTHREAD_MUTEX_INITIALIZER,	/* prevents statusThread from interfering with request*Volume */
-	LowMut = PTHREAD_MUTEX_INITIALIZER,
-	HighMut = PTHREAD_MUTEX_INITIALIZER,
-	SendMut = PTHREAD_MUTEX_INITIALIZER;
-static int Terminal = 1, Autoloader = 0;
-static struct timeval Starttime;
-static volatile int ActSenders = 0;
-
-#ifdef __CYGWIN__
-#include <malloc.h>
-#undef assert
-#define assert(x) ((x) || (*(char *) 0 = 1))
-#endif
-
-typedef enum { off, on, invalid } flag_t;
 
 
 static int kb2str(char *s, double v)
@@ -275,9 +137,9 @@ static void summary(unsigned long long numb, int numthreads)
 		msg += sprintf(msg,", %dx full",FullCount);
 	*msg++ = '\n';
 	*msg = '\0';
-	if (Log != STDERR_FILENO)
+	if ((Log != STDERR_FILENO) && (StatusLog != 0))
 		(void) write(Log,buf,msg-buf);
-	if (Status)
+	if ((Status != 0) && (Quiet == 0))
 		(void) write(STDERR_FILENO,buf,msg-buf);
 }
 
@@ -292,7 +154,7 @@ static void cancelAll(void)
 		d = d->next;
 	} while (d);
 	if (Status)
-		(void) pthread_cancel(Reader);
+		(void) pthread_cancel(ReaderThr);
 }
 
 
@@ -304,9 +166,8 @@ static RETSIGTYPE sigHandler(int signr)
 		ErrorOccurred = 1;
 		Terminate = 1;
 		(void) close(In);
-		if (TermQ[1] != -1) {
+		if (TermQ[1] != -1)
 			(void) write(TermQ[1],"0",1);
-		}
 		if (StartWrite > 0)
 			(void) pthread_cond_signal(&PercHigh);
 		if (StartRead < 1)
@@ -318,46 +179,24 @@ static RETSIGTYPE sigHandler(int signr)
 }
 
 
-
-/* Thread-safe replacement for usleep. Argument must be a whole
- * number of microseconds to sleep.
- */
-static int mt_usleep(unsigned long long sleep_usecs)
-{
-	struct timespec tv;
-	tv.tv_sec = sleep_usecs / 1000000;
-	tv.tv_nsec = (sleep_usecs % 1000000) * 1000;
-
-	do {
-		/* Sleep for the time specified in tv. If interrupted by a
-		 * signal, place the remaining time left to sleep back into tv.
-		 */
-		if (0 == nanosleep(&tv, &tv)) 
-			return 0;
-	} while (errno == EINTR);
-	return -1;
-}
-
-
-
-static void *watchdogThread(void *ignored)
+void *watchdogThread(void *ignored)
 {
 	unsigned long ni = Numin, no = Numout;
 	unsigned long long timeout = Timeout * 1000000LL;
 	for (;;) {
 		mt_usleep(timeout);
-		if (WatchdogRaised) {
+		if (Watchdog > 1) {
 			errormsg("watchdog timeout: SIGINT had no effect; sending SIGKILL\n");
 			kill(getpid(),SIGKILL);
 		}
 		if ((ni == Numin) && (Finish == -1)) {
 			errormsg("watchdog timeout: input stalled; sending SIGINT\n");
-			WatchdogRaised = 1;
+			Watchdog = 2;
 			kill(getpid(),SIGINT);
 		}
 		if (no == Numout) {
 			errormsg("watchdog timeout: output stalled; sending SIGINT\n");
-			WatchdogRaised = 1;
+			Watchdog = 2;
 			kill(getpid(),SIGINT);
 		}
 		ni = Numin;
@@ -478,337 +317,6 @@ static void statusThread(void)
 			break;
 	}
 }
-
-
-
-static inline long long timediff(struct timespec *restrict t1, struct timespec *restrict t2)
-{
-	long long tdiff;
-	tdiff = (t1->tv_sec - t2->tv_sec) * 1000000;
-	tdiff += (t1->tv_nsec - t2->tv_nsec) / 1000;
-	if (tdiff < 0)
-		tdiff = 0;
-	return tdiff;
-}
-
-
-
-static long long enforceSpeedLimit(unsigned long long limit, long long num, struct timespec *last)
-{
-	struct timespec now;
-	long long tdiff;
-	double dt;
-	long self = (long) pthread_self();
-	
-	num += Blocksize;
-	if (num < 0) {
-		debugmsg("enforceSpeedLimit(%lld,%lld): thread %ld\n",limit,num,self);
-		return num;
-	}
-	(void) clock_gettime(ClockSrc,&now);
-	tdiff = timediff(&now,last);
-	dt = (double)tdiff * 1E-6;
-	if (((double)num/dt) > (double)limit) {
-		double req = (double)num/limit - dt;
-		long long w = (long long) (req * 1E6);
-		if (w >= TickTime) {
-			long long slept, ret;
-			(void) mt_usleep(w);
-			(void) clock_gettime(ClockSrc,last);
-			slept = timediff(last,&now);
-			ret = -(long long)((double)limit * (double)(slept-w) * 1E-6);
-			debugmsg("thread %ld: slept for %lld usec (planned for %lld), ret = %lld\n",self,slept,w,ret);
-			return ret;
-		} else {
-			debugmsg("thread %ld: request for sleeping %lld usec delayed\n",self,w);
-			/* 
-			 * Sleeping now would cause too much of a slowdown. So
-			 * we defer this sleep until the sleeping time is
-			 * longer than the tick time. Like this we can stay as
-			 * close to the speed limit as possible.
-			 */
-			return num;
-		}
-	}
-	debugmsg("thread %ld: %lld/%g (%g) <= %g\n",self,num,dt,num/dt,(double)limit);
-	return num;
-}
-
-
-
-static int promptInteractive(unsigned at, unsigned num)
-{
-	static const char prompt[] = "\nContinue with next volume? Press 'y' to continue or 'n' to finish...";
-	static const char contmsg[] = "\nyes - continuing with next volume...\n";
-	static const char donemsg[] = "\nno - input done, waiting for output to finish...\n";
-	int err;
-
-	err = pthread_mutex_lock(&TermMut);
-	assert(0 == err);
-	if (-1 == write(STDERR_FILENO,prompt,sizeof(prompt))) {
-		errormsg("error accessing controlling terminal for manual volume change request: %s\nConsider using autoload option, when running mbuffer without terminal.\n",strerror(errno));
-		Terminate = 1;
-		pthread_exit((void *) -1);
-	}
-	for (;;) {
-		char c = 0;
-		if (-1 == read(STDERR_FILENO,&c,1) && (errno != EINTR)) {
-			errormsg("error accessing controlling terminal for manual volume change request: %s\nConsider using autoload option, when running mbuffer without terminal.\n",strerror(errno));
-			Terminate = 1;
-			pthread_exit((void *) -1);
-		}
-		debugmsg("prompt input %c\n",c);
-		switch (c) {
-		case 'n':
-		case 'N':
-			Rest = num;
-			(void) write(STDERR_FILENO,donemsg,sizeof(donemsg));
-			err = pthread_mutex_lock(&HighMut);
-			assert(err == 0);
-			err = sem_post(&Buf2Dev);
-			assert(err == 0);
-			err = pthread_cond_signal(&PercHigh);
-			assert(err == 0);
-			err = pthread_mutex_unlock(&HighMut);
-			assert(err == 0);
-			err = pthread_mutex_unlock(&TermMut);
-			assert(0 == err);
-			Finish = at;
-			if (Status)
-				pthread_exit(0);
-			return 0;
-		case 'y':
-		case 'Y':
-			(void) write(STDERR_FILENO,contmsg,sizeof(contmsg));
-			err = pthread_mutex_unlock(&TermMut);
-			assert(0 == err);
-			return 1;
-		default:;
-		}
-	}
-}
-
-
-
-static int requestInputVolume(unsigned at, unsigned num)
-{
-	static struct timeval volstart = {0,0};
-	const char *cmd;
-	struct timeval now;
-	double diff;
-	unsigned min,hr;
-	char cmd_buf[15+strlen(Infile)];
-
-	debugmsg("requesting new volume for input\n");
-	(void) gettimeofday(&now,0);
-	if (volstart.tv_sec) 
-		diff = now.tv_sec - volstart.tv_sec + (double) (now.tv_usec - volstart.tv_usec) * 1E-6;
-	else
-		diff = now.tv_sec - Starttime.tv_sec + (double) (now.tv_usec - Starttime.tv_usec) * 1E-6;
-	if (diff > 3600) {
-		hr = (unsigned) (diff / 3600);
-		diff -= hr * 3600;
-		min = (unsigned) (diff / 60);
-		diff -= min * 60;
-		infomsg("time for reading volume: %u:%02u:%02f\n",hr,min,diff);
-	} else if (diff > 60) {
-		min = (unsigned) (diff / 60);
-		diff -= min * 60;
-		infomsg("time for reading volume: %02u:%02f\n",min,diff);
-	} else
-		infomsg("time for reading volume: %02fsec.\n",diff);
-	if (-1 == close(In))
-		errormsg("error closing input: %s\n",strerror(errno));
-	do {
-		if ((Autoloader) && (Infile)) {
-			int ret;
-			if (AutoloadCmd) {
-				cmd = AutoloadCmd;
-			} else {
-				(void) snprintf(cmd_buf, sizeof(cmd_buf), "mt -f %s offline", Infile);
-				cmd = cmd_buf;
-			}
-			infomsg("requesting new input volume with command '%s'\n",cmd);
-			ret = system(cmd);
-			if (0 < ret) {
-				warningmsg("error running \"%s\" to change volume in autoloader: exitcode %d\n",cmd,ret);
-				Terminate = 1;
-				pthread_exit((void *) 0);
-			} else if (0 > ret) {
-				errormsg("error starting \"%s\" to change volume in autoloader: %s\n", cmd, strerror(errno));
-				Terminate = 1;
-				pthread_exit((void *) -1);
-			}
-			if (AutoloadTime) {
-				infomsg("waiting for drive to get ready...\n");
-				(void) sleep(AutoloadTime);
-			}
-		} else {
-			if (0 == promptInteractive(at,num))
-				return 0;
-		}
-		In = open(Infile, O_RDONLY | LARGEFILE | Direct);
-		if ((-1 == In) && (errno == EINVAL))
-			In = open(Infile, O_RDONLY | Direct);
-		if (-1 == In)
-			errormsg("could not reopen input: %s\n",strerror(errno));
-#ifdef __sun
-		if (-1 == directio(In,DIRECTIO_ON))
-			infomsg("direct I/O hinting failed for input: %s\n",strerror(errno));
-#endif
-	} while (In == -1);
-	(void) gettimeofday(&volstart,0);
-	diff = volstart.tv_sec - now.tv_sec + (double) (volstart.tv_usec - now.tv_usec) * 1E-6;
-	infomsg("tape-change took %fsec. - continuing with next volume\n",diff);
-	NumVolumes--;
-	if (Terminal && ! Autoloader) {
-		char msg[] = "\nOK - continuing...\n";
-		(void) write(STDERR_FILENO,msg,sizeof(msg));
-	}
-	return 1;
-}
-
-
-
-static void releaseLock(void *l)
-{
-	int err = pthread_mutex_unlock((pthread_mutex_t *)l);
-	assert(err == 0);
-}
-
-
-
-#ifndef __sun
-static void waitInput(void)
-{
-	if (Status != 0) {
-		int maxfd = TermQ[0] > In ? TermQ[0] + 1 : In + 1;
-		int err;
-
-		fd_set readfds;
-		FD_ZERO(&readfds);
-		FD_SET(TermQ[0],&readfds);
-		FD_SET(In,&readfds);
-		do {
-			err = select(maxfd,&readfds,0,0,0);
-			debugiomsg("inputThread: select(%d, {%d,%d}, 0, 0, 0) = %d\n", maxfd,In,TermQ[0],err);
-			assert((err > 0) || (errno == EBADF || errno == EINTR));
-		} while ((err < 0) && (errno == EINTR));
-		if (FD_ISSET(TermQ[0],&readfds))
-			pthread_exit((void *)-1);
-		assert(FD_ISSET(In,&readfds));
-	}
-}
-#endif
-
-
-
-static void *inputThread(void *ignored)
-{
-	int fill = 0;
-	unsigned long long num;
-	int at = 0;
-	long long xfer = 0;
-	const double startread = StartRead, startwrite = StartWrite;
-	struct timespec last;
-
-#ifndef __sun
-	if (Status != 0)
-		assert(TermQ[0] != -1);
-#endif
-	(void) clock_gettime(ClockSrc,&last);
-	assert(ignored == 0);
-	infomsg("inputThread: starting with threadid %ld...\n",(long)pthread_self());
-	for (;;) {
-		int err;
-
-		if (startread < 1) {
-			err = pthread_mutex_lock(&LowMut);
-			assert(err == 0);
-			err = sem_getvalue(&Buf2Dev,&fill);
-			assert(err == 0);
-			if (fill == Numblocks - 1) {
-				debugmsg("inputThread: buffer full, waiting for it to drain.\n");
-				pthread_cleanup_push(releaseLock,&LowMut);
-				err = pthread_cond_wait(&PercLow,&LowMut);
-				assert(err == 0);
-				pthread_cleanup_pop(0);
-				++FullCount;
-				debugmsg("inputThread: low watermark reached, continuing...\n");
-			}
-			err = pthread_mutex_unlock(&LowMut);
-			assert(err == 0);
-		}
-		if (Terminate) {	/* for async termination requests */
-			debugmsg("inputThread: terminating early upon request...\n");
-			if (-1 == close(In))
-				errormsg("error closing input: %s\n",strerror(errno));
-			if (Status)
-				pthread_exit((void *)1);
-			return (void *) 1;
-		}
-		err = sem_wait(&Dev2Buf); /* Wait for one or more buffer blocks to be free */
-		assert(err == 0);
-		num = 0;
-		do {
-			int in;
-#ifndef __sun
-			waitInput();
-#endif
-			in = read(In,Buffer[at] + num,Blocksize - num);
-			debugiomsg("inputThread: read(In, Buffer[%d] + %llu, %llu) = %d\n", at, num, Blocksize - num, in);
-			if (in > 0) {
-				num += in;
-			} else if ((0 == in) && (Terminal||Autoloader) && (NumVolumes != 1)) {
-				if (0 == requestInputVolume(at,num))
-					return 0;
-			} else if ((-1 == in) && (errno == EIO) && (Terminal||Autoloader) && (NumVolumes != 1)) {
-				requestInputVolume(at,num);
-			} else if (in <= 0) {
-				/* error or end-of-file */
-				if ((-1 == in) && (errno == EINTR))
-					continue;
-				if ((-1 == in) && (Terminate == 0))
-					errormsg("inputThread: error reading at offset 0x%llx: %s\n",Numin*Blocksize,strerror(errno));
-				Rest = num;
-				Finish = at;
-				debugmsg("inputThread: last block has %llu bytes\n",num);
-				err = pthread_mutex_lock(&HighMut);
-				assert(err == 0);
-				err = sem_post(&Buf2Dev);
-				assert(err == 0);
-				err = pthread_cond_signal(&PercHigh);
-				assert(err == 0);
-				err = pthread_mutex_unlock(&HighMut);
-				assert(err == 0);
-				infomsg("inputThread: exiting...\n");
-				if (Status)
-					pthread_exit((void *)(ptrdiff_t) in);
-				return (void *)(ptrdiff_t) in;
-			}
-		} while (num < Blocksize);
-		if (MaxReadSpeed)
-			xfer = enforceSpeedLimit(MaxReadSpeed,xfer,&last);
-		err = sem_post(&Buf2Dev);
-		assert(err == 0);
-		if (startwrite > 0) {
-			err = pthread_mutex_lock(&HighMut);
-			assert(err == 0);
-			err = sem_getvalue(&Buf2Dev,&fill);
-			assert(err == 0);
-			if (((double) fill / (double) Numblocks) + DBL_EPSILON >= startwrite) {
-				err = pthread_cond_signal(&PercHigh);
-				assert(err == 0);
-			}
-			err = pthread_mutex_unlock(&HighMut);
-			assert(err == 0);
-		}
-		if (++at == Numblocks)
-			at = 0;
-		Numin++;
-	}
-}
-
 
 
 int syncSenders(char *b, int s)
@@ -1339,176 +847,6 @@ static void *outputThread(void *arg)
 
 
 
-static void version(void)
-{
-	(void) fprintf(stderr,
-		"mbuffer version "PACKAGE_VERSION"\n"\
-		"Copyright 2001-2017 - T. Maier-Komor\n"\
-		"License: GPLv3 - see file LICENSE\n"\
-		"This program comes with ABSOLUTELY NO WARRANTY!!!\n"
-		"Donations via PayPal to thomas@maier-komor.de are welcome and support this work!\n"
-		"\n"
-		);
-	exit(EXIT_SUCCESS);
-}
-
-
-
-static void usage(void)
-{
-	const char *dim = "bkMGTP";
-	unsigned long long m = Numblocks * Blocksize;
-	while (m >= 10000) {
-		m >>= 10;
-		++dim;
-	}
-	(void) fprintf(stderr,
-		"usage: mbuffer [Options]\n"
-		"Options:\n"
-		"-b <num>   : use <num> blocks for buffer (default: %ld)\n"
-		"-s <size>  : use blocks of <size> bytes for processing (default: %llu)\n"
-#if defined(_SC_AVPHYS_PAGES) && defined(_SC_PAGESIZE) && !defined(__CYGWIN__) || defined(__FreeBSD__)
-		"-m <size>  : memory <size> of buffer in b,k,M,G,%% (default: 2%% = %llu%c)\n"
-#else
-		"-m <size>  : memory <size> of buffer in b,k,M,G,%% (default: %llu%c)\n"
-#endif
-#ifdef _POSIX_MEMLOCK_RANGE
-		"-L         : lock buffer in memory (unusable with file based buffers)\n"
-#endif
-		"-d         : use blocksize of device for output\n"
-		"-D <size>  : assumed output device size (default: infinite/auto-detect)\n"
-		"-P <num>   : start writing after buffer has been filled more than <num>%%\n"
-		"-p <num>   : start reading after buffer has been filled less than <num>%%\n"
-		"-i <file>  : use <file> for input\n"
-		"-o <file>  : use <file> for output (this option can be passed MULTIPLE times)\n"
-		"--append   : append to output file (must be passed before -o)\n"
-		"--truncate : truncate next file (must be passed before -o)\n"
-		"-I <h>:<p> : use network port <port> as input, allow only host <h> to connect\n"
-		"-I <p>     : use network port <port> as input\n"
-		"-O <h>:<p> : output data to host <h> and port <p> (MUTLIPLE outputs supported)\n"
-		"-n <num>   : <num> volumes for input, '0' to prompt interactively\n"
-		"-t         : use memory mapped temporary file (for huge buffer)\n"
-		"-T <file>  : as -t but uses <file> as buffer\n"
-		"-l <file>  : use <file> for logging messages\n"
-		"-u <num>   : pause <num> milliseconds after each write\n"
-		"-r <rate>  : limit read rate to <rate> B/s, where <rate> can be given in b,k,M,G\n"
-		"-R <rate>  : same as -r for writing; use either one, if your tape is too fast\n"
-		"-f         : overwrite existing files\n"
-		"-a <time>  : autoloader which needs <time> seconds to reload\n"
-		"-A <cmd>   : issue command <cmd> to request new volume\n"
-		"-v <level> : set verbose level to <level> (valid values are 0..6)\n"
-		"-q         : quiet - do not display the status on stderr\n"
-		"-Q         : quiet - do not log the status\n"
-		"-c         : write with synchronous data integrity support\n"
-		"-e         : stop processing on any kind of error\n"
-#ifdef O_DIRECT
-		"--direct   : open input and output with O_DIRECT\n"
-#endif
-#if defined HAVE_LIBCRYPTO || defined HAVE_LIBMD5 || defined HAVE_LIBMHASH
-		"-H\n"
-		"--md5      : generate md5 hash of transfered data\n"
-		"--hash <a> : use alogritm <a>, if <a> is 'list' possible algorithms are listed\n"
-		"--pid      : print PID of this instance\n"
-		"-W <time>  : set watchdog timeout to <time> seconds\n"
-#endif
-		"-4         : force use of IPv4\n"
-		"-6         : force use of IPv6\n"
-		"-0         : use IPv4 or IPv6\n"
-		"--tcpbuffer: size for TCP buffer\n"
-		"--tapeaware: write to end of tape instead of stopping when the drive signals\n"
-		"             the media end is approaching (write until 2x ENOSPC errors)\n"
-		"-V\n"
-		"--version  : print version information\n"
-		"Unsupported buffer options: -t -Z -B\n"
-		,Numblocks
-		,Blocksize
-		,m
-		,*dim
-		);
-	exit(EXIT_SUCCESS);
-}
-
-
-static unsigned long long calcint(const char **argv, int c, unsigned long long def)
-{
-	char ch;
-	double d = (double)def;
-	
-	switch (sscanf(argv[c],"%lf%c",&d,&ch)) {
-	default:
-		abort();
-		break;
-	case 2:
-		if (d <= 0)
-			fatal("invalid argument - must be > 0\n");
-		switch (ch) {
-		case 'k':
-		case 'K':
-			d *= 1024.0;
-			return (unsigned long long) d;
-		case 'm':
-		case 'M':
-			d *= 1024.0*1024.0;
-			return (unsigned long long) d;
-		case 'g':
-		case 'G':
-			d *= 1024.0*1024.0*1024.0;
-			return (unsigned long long) d;
-		case 't':
-		case 'T':
-			d *= 1024.0*1024.0*1024.0*1024.0;
-			return (unsigned long long) d;
-		case '%':
-			if ((d >= 90) || (d <= 0))
-				fatal("invalid value for percentage (must be 0..90)\n");
-			return (unsigned long long) d;
-		case 'b':
-		case 'B':
-			if (d < 128)
-				fatal("invalid value for number of bytes\n");
-			return (unsigned long long) d;
-		default:
-			if (argv[c][-2] == '-')
-				fatal("unrecognized size charakter \"%c\" for option \"%s\"\n",ch,&argv[c][-2]);
-			else
-				fatal("unrecognized size charakter \"%c\" for option \"%s\"\n",ch,argv[c-1]);
-			return d;
-		}
-	case 1:
-		if (d <= 0)
-			fatal("invalid argument - must be > 0\n");
-		if (d <= 100) {
-			if (argv[c][-2] == '-')
-				fatal("invalid low value for option \"%s\" - missing suffix?\n",&argv[c][-2]);
-			else
-				fatal("invalid low value for option \"%s\" - missing suffix?\n",argv[c-1]);
-		}
-		return d;
-	case 0:
-		break;
-	}
-	errormsg("unrecognized argument \"%s\" for option \"%s\"\n",argv[c],argv[c-1]);
-	return d;
-}
-
-
-
-static int argcheck(const char *opt, const char **argv, int *c, int argc)
-{
-	if (strncmp(opt,argv[*c],strlen(opt))) 
-		return 1;
-	if (strlen(argv[*c]) > 2)
-		argv[*c] += 2;
-	else {
-		(*c)++;
-		if (*c == argc)
-			fatal("missing argument to option %s\n",opt);
-	}
-	return 0;
-}
-
-
-
 static void openDestinationFiles(dest_t *d)
 {
 	unsigned errs = ErrorOccurred;
@@ -1550,300 +888,6 @@ static void openDestinationFiles(dest_t *d)
 		fatal("unable to open all outputs\n");
 }
 
-
-
-static const char *calcval(const char *arg, unsigned long long *res)
-{
-	char ch;
-	double d;
-	
-	switch (sscanf(arg,"%lf%c",&d,&ch)) {
-	default:
-		abort();
-		break;
-	case 2:
-		if (d <= 0)
-			return "negative value out of range";
-		switch (ch) {
-		case 'k':
-		case 'K':
-			d *= 1024.0;
-			*res = d;
-			return 0;
-		case 'm':
-		case 'M':
-			d *= 1024.0*1024.0;
-			*res = d;
-			return 0;
-		case 'g':
-		case 'G':
-			d *= 1024.0*1024.0*1024.0;
-			*res = d;
-			return 0;
-		case 't':
-		case 'T':
-			d *= 1024.0*1024.0*1024.0*1024.0;
-			*res = d;
-			return 0;
-		case '%':
-			if ((d >= 90) || (d <= 0))
-				return "invalid value for percentage (must be 0..90)";
-			*res = d;
-			return 0;
-		case 'b':
-		case 'B':
-			if (d < 128)
-				return "invalid value for number of bytes";
-			*res = d;
-			return 0;
-		default:
-			return "invalid dimension";
-		}
-	case 1:
-		if (d <= 0)
-			return "value out of range";
-		*res = d;
-		return 0;
-	case 0:
-		break;
-	}
-	return "unrecognized argument";
-}
-
-
-static int isEmpty(const char *l)
-{
-	while (*l) {
-		if ((*l != ' ') && (*l != '\t'))
-			return 0;
-		++l;
-	}
-	return 1;
-}
-
-
-flag_t parseFlag(const char *valuestr)
-{
-	if ((strcasecmp(valuestr,"yes") == 0) || (strcasecmp(valuestr,"on") == 0) || (strcmp(valuestr,"1") == 0) || (strcmp(valuestr,"true") == 0))
-		return on;
-	else if ((strcasecmp(valuestr,"no") == 0) || (strcasecmp(valuestr,"off") == 0) || (strcmp(valuestr,"0") == 0) || (strcmp(valuestr,"false") == 0))
-		return off;
-	else 
-		return invalid;
-}
-
-
-static void readConfigFile(const char *cfname)
-{
-	int df,lineno = 0;
-	struct stat st;
-	char *cfdata, *line;
-
-	df = open(cfname,O_RDONLY);
-	if (df == -1) {
-		if (errno == ENOENT)
-			infomsg("no config file %s\n",cfname);
-		else
-			warningmsg("error opening config file %s: %s\n",cfname,strerror(errno));
-		return;
-	}
-	if (-1 == fstat(df,&st)) {
-		warningmsg("unable to stat config file %s: %s\n",cfname,strerror(errno));
-		close(df);
-		return;
-	}
-	if ((getuid() != st.st_uid) && (st.st_uid != 0)) {
-		warningmsg("ignoring config file '%s' from different user\n",cfname);
-		close(df);
-		return;
-	}
-	infomsg("reading config file %s\n",cfname);
-	cfdata = malloc(st.st_size+1);
-	if (cfdata == 0)
-		fatal("out of memory\n");
-	int n = read(df,cfdata,st.st_size);
-	close(df);
-	if (n < 0) {
-		warningmsg("error reading %s: %s\n",cfname,strerror(errno));
-		free(cfdata);
-		return;
-	}
-	cfdata[n] = 0;
-	line = cfdata;
-	while (line && *line) {
-		char key[64],valuestr[64];
-		int a;
-		++lineno;
-		char *nl = strchr(line,'\n');
-		if (nl) {
-			*nl = 0;
-			++nl;
-		}
-		char *pound = strchr(line,'#');
-		if (pound)
-			*pound = 0;
-		if (isEmpty(line)) {
-			line = nl;
-			continue;
-		}
-		a = sscanf(line,"%63[A-Za-z]%*[ \t=:]%63[0-9a-zA-Z.]",key,valuestr);
-		if (a != 2) {
-			warningmsg("config file %s, line %d: error parsing '%s'\n",cfname,lineno,line);
-			line = nl;
-			continue;
-		}
-		line = nl;
-		debugmsg("parsing key/value pair %s=%s\n",key,valuestr);
-		if (strcasecmp(key,"numblocks") == 0) {
-			long nb = strtol(valuestr,0,0);
-			if ((nb == 0) && (errno == EINVAL)) {
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			} else {
-				Numblocks = nb;
-				debugmsg("Numblocks = %llu\n",Numblocks);
-			}
-		} else if (strcasecmp(key,"pause") == 0) {
-			long long p = strtoll(valuestr,0,0);
-			if ((p == 0) && (errno == EINVAL)) {
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			} else {
-				Pause = p;
-				debugmsg("Pause = %lldusec\n",Pause);
-			}
-		} else if (strcasecmp(key,"autoloadtime") == 0) {
-			long at = strtol(valuestr,0,0) - 1;
-			if ((at == 0) && (errno == EINVAL)) 
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			else {
-				AutoloadTime = at;
-				debugmsg("Autoloader time = %d\n",AutoloadTime);
-			}
-		} else if (strcasecmp(key,"startread") == 0) {
-			double sr = 0;
-			if (1 == sscanf(valuestr,"%lf",&sr))
-				sr /= 100;
-			if ((sr <= 1) && (sr > 0)) {
-				StartRead = sr;
-				debugmsg("StartRead = %1.2lf\n",StartRead);
-			}
-		} else if (strcasecmp(key,"startwrite") == 0) {
-			double sw = 0;
-			if (1 == sscanf(valuestr,"%lf",&sw))
-				sw /= 100;
-			if ((sw <= 1) && (sw > 0)) {
-				StartWrite = sw;
-				debugmsg("StartWrite = %1.2lf\n",StartWrite);
-			}
-		} else if (strcasecmp(key,"timeout") == 0) {
-			long t = strtol(valuestr,0,0);
-			if (((t == 0) && (errno == EINVAL)) || (t < 0)) 
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			else {
-				Timeout = t;
-				debugmsg("Timeout = %lu sec.\n",Timeout);
-			}
-		} else if (strcasecmp(key,"showstatus") == 0) {
-			switch (parseFlag(valuestr)) {
-			case on:
-				Quiet = 0;
-				debugmsg("showstatus = yes\n");
-				break;
-			case off:
-				Quiet = 1;
-				debugmsg("showstatus = no\n");
-				break;
-			default:
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			}
-		} else if (strcasecmp(key,"tapeaware") == 0) {
-			switch (parseFlag(valuestr)) {
-			case on:
-				TapeAware = 0;
-				debugmsg("tapeaware = off\n");
-				break;
-			case off:
-				TapeAware = 1;
-				debugmsg("tapeaware = on\n");
-				break;
-			default:
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			}
-		} else if (strcasecmp(key,"logstatus") == 0) {
-			switch (parseFlag(valuestr)) {
-			case on:
-				StatusLog = 1;
-				debugmsg("logstatus = yes\n");
-				break;
-			case off:
-				StatusLog = 0;
-				debugmsg("logstatus = no\n");
-				break;
-			default:
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			}
-		} else if (strcasecmp(key,"memlock") == 0) {
-			switch (parseFlag(valuestr)) {
-			case on:
-				Memlock = 1;
-				debugmsg("Memlock = %lu\n",Memlock);
-				break;
-			case off:
-				Memlock = 0;
-				debugmsg("Memlock = %lu\n",Memlock);
-				break;
-			default:
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			}
-		} else if (strcasecmp(key,"printpid") == 0) {
-			switch (parseFlag(valuestr)) {
-			case on:
-				printmsg("PID is %d\n",getpid());
-				break;
-			case off:
-				/* don't do anything */
-				break;
-			default:
-				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
-			}
-		} else if (strcasecmp(key,"StatusInterval") == 0) {
-			StatusInterval = strtof(valuestr,0);
-			debugmsg("StatusInterval = %f\n",StatusInterval);
-		} else if (strcasecmp(key,"verbose") == 0) {
-			setVerbose(valuestr);
-		} else {
-			unsigned long long value = 0;
-			const char *argerror = calcval(valuestr,&value);
-			if (argerror) {
-				warningmsg("ignoring invalid key/value pair (%s = %s): %s\n",key,valuestr,argerror);
-			} else if (strcasecmp(key,"blocksize") == 0) {
-				Blocksize = value;
-				debugmsg("Blocksize = %lu\n",Blocksize);
-			} else if (strcasecmp(key,"maxwritespeed") == 0) {
-				MaxWriteSpeed = value;
-				debugmsg("MaxWriteSpeed = %lu\n",MaxWriteSpeed);
-			} else if (strcasecmp(key,"maxreadspeed") == 0) {
-				MaxReadSpeed = value;
-				debugmsg("MaxReadSpeed = %lu\n",MaxReadSpeed);
-			} else if (strcasecmp(key,"Totalmem") == 0) {
-				if (value >= 100) {
-					Totalmem = value;
-					debugmsg("Totalmem = %lluk\n",Totalmem>>10);
-				} else if (NumP && PgSz) {
-					Totalmem = ((unsigned long long) NumP * PgSz * value) / 100 ;
-					debugmsg("Totalmem = %lluk\n",Totalmem>>10);
-				} else {
-					warningmsg("Unable to determine page size or amount of available memory - please specify an absolute amount of memory.\n");
-				}
-			} else if (strcasecmp(key,"tcpbuffer") == 0) {
-				TCPBufSize = value;
-				debugmsg("TCPBufSize = %lu\n",TCPBufSize);
-			} else {
-				warningmsg("unknown parameter: %s\n",key);
-			}
-		}
-	}
-	free(cfdata);
-}
 
 
 static int joinSenders()
@@ -1904,7 +948,7 @@ static void initDefaults()
 {
 	/* gather system parameters */
 	TickTime = 1000000 / sysconf(_SC_CLK_TCK);
-#if defined(_SC_AVPHYS_PAGES) //&& !defined(__CYGWIN__)
+#if defined(_SC_AVPHYS_PAGES)
 	NumP = sysconf(_SC_AVPHYS_PAGES);
 	if (NumP < 0) {
 		warningmsg("unable to determine number of available memory pages: %s\n",strerror(errno));
@@ -1958,131 +1002,6 @@ static void initDefaults()
 }
 
 
-static void openInput()
-{
-	debugmsg("opening input...\n");
-	if (Infile) {
-		int flags = O_RDONLY | LARGEFILE | Direct;
-		In = open(Infile,flags);
-		if (-1 == In) {
-			if (errno == EINVAL) {
-				flags &= ~LARGEFILE;
-				In = open(Infile,flags);
-			}
-			if (-1 == In)
-				fatal("could not open input file: %s\n",strerror(errno));
-		}
-		struct stat st;
-		if ((0 == fstat(In,&st)) && ((st.st_mode & S_IFMT) == S_IFREG))
-			InSize = st.st_size;
-	} else if (In == -1) {
-		In = STDIN_FILENO;
-	}
-#ifdef __sun
-	if (0 == directio(In,DIRECTIO_ON))
-		infomsg("direct I/O hinting enabled for input\n");
-	else
-		infomsg("direct I/O hinting failed for input: %s\n",strerror(errno));
-#endif
-}
-
-
-static void initBuffer()
-{
-	int c = 0;
-
-	if ((Blocksize * (long long)Numblocks) > (long long)SSIZE_MAX)
-		fatal("Cannot address so much memory (%lld*%d=%lld>%lld).\n",Blocksize,Numblocks,Blocksize*(long long)Numblocks,(long long)SSIZE_MAX);
-	/* create buffer */
-	Buffer = (char **) valloc(Numblocks * sizeof(char *));
-	if (!Buffer)
-		fatal("Could not allocate enough memory (%d requested): %s\n",Numblocks * sizeof(char *),strerror(errno));
-	if (Memmap) {
-		infomsg("mapping temporary file to memory with %llu blocks with %llu byte (%llu kB total)...\n",(unsigned long long) Numblocks,(unsigned long long) Blocksize,(unsigned long long) ((Numblocks*Blocksize) >> 10));
-		if (!Tmpfile) {
-			char tmplname[] = "mbuffer-XXXXXX";
-			char *tmpdir = getenv("TMPDIR") ? getenv("TMPDIR") : "/var/tmp";
-			size_t tl = strlen(tmpdir);
-			Tmpfile = malloc(sizeof(tmplname) + tl + 1);
-			if (!Tmpfile)
-				fatal("out of memory: %s\n",strerror(errno));
-			(void) memcpy(Tmpfile,tmpdir,tl);
-			Tmpfile[tl] = '/';
-			(void) strncpy(Tmpfile+tl+1,tmplname,sizeof(tmplname));
-			Tmp = mkstemp(Tmpfile);
-			infomsg("tmpfile is %s\n",Tmpfile);
-		} else {
-			mode_t mode = O_RDWR | LARGEFILE;
-			if (strncmp(Tmpfile,"/dev/",5))
-				mode |= O_CREAT|O_EXCL;
-			Tmp = open(Tmpfile,mode,0600);
-		}
-		if (-1 == Tmp)
-			fatal("could not create temporary file (%s): %s\n",Tmpfile,strerror(errno));
-		if (strncmp(Tmpfile,"/dev/",5))
-			(void) unlink(Tmpfile);
-		/* resize the file. Needed - at least under linux, who knows why? */
-		if (-1 == lseek(Tmp,Numblocks * Blocksize - sizeof(int),SEEK_SET))
-			fatal("could not resize temporary file: %s\n",strerror(errno));
-		if (-1 == write(Tmp,&c,sizeof(c)))
-			fatal("could not resize temporary file: %s\n",strerror(errno));
-		Buffer[0] = mmap(0,Blocksize*Numblocks,PROT_READ|PROT_WRITE,MAP_SHARED,Tmp,0);
-		if (MAP_FAILED == Buffer[0])
-			fatal("could not map buffer-file to memory: %s\n",strerror(errno));
-		debugmsg("temporary file mapped to address %p\n",Buffer[0]);
-	} else {
-		infomsg("allocating memory for %d blocks with %llu byte (%llu kB total)...\n",Numblocks,(unsigned long long) Blocksize,(unsigned long long) ((Numblocks*Blocksize) >> 10));
-		Buffer[0] = (char *) valloc(Blocksize * Numblocks);
-		if (Buffer[0] == 0)
-			fatal("Could not allocate enough memory (%lld requested): %s\n",(unsigned long long)Blocksize * Numblocks,strerror(errno));
-#ifdef MADV_DONTFORK
-		if (-1 == madvise(Buffer[0],Blocksize * Numblocks, MADV_DONTFORK))
-			warningmsg("unable to advise memory handling of buffer: %s\n",strerror(errno));
-#endif
-	}
-	for (c = 1; c < Numblocks; c++) {
-		Buffer[c] = Buffer[0] + Blocksize * c;
-		*Buffer[c] = 0;	/* touch every block before locking */
-	}
-
-#ifdef _POSIX_MEMLOCK_RANGE
-	if (Memlock) {
-		uid_t uid;
-#ifndef HAVE_SETEUID
-#define seteuid setuid
-#endif
-		uid = geteuid();
-		if (0 != seteuid(0))
-			warningmsg("could not change to uid 0 to lock memory (is mbuffer setuid root?)\n");
-		else if ((0 != mlock((char *)Buffer,Numblocks * sizeof(char *))) || (0 != mlock(Buffer[0],Blocksize * Numblocks)))
-			warningmsg("could not lock buffer in memory: %s\n",strerror(errno));
-		else
-			infomsg("memory locked successfully\n");
-		int err = seteuid(uid);	/* don't give anyone a chance to attack this program, so giveup uid 0 after locking... */
-		assert(err == 0);
-	}
-#endif
-}
-
-
-static void searchOptionV(int argc, const char **argv)
-{
-	int c;
-	for (c = 1; c < argc; c++) {
-		const char *arg = argv[c];
-		if ((arg[0] == '-') && (arg[1] == 'v')) {
-			if (arg[2]) {
-				setVerbose(arg+2);
-			} else if (++c < argc) {
-				setVerbose(argv[c]);
-			} else {
-				fatal("missing argument to option -v\n");
-			}
-		}
-	}
-}
-
-
 static void checkBlocksizes(dest_t *dest)
 {
 #ifdef HAVE_STRUCT_STAT_ST_BLKSIZE
@@ -2111,11 +1030,11 @@ static void checkBlocksizes(dest_t *dest)
 	if (-1 == fstat(In,&st))
 		warningmsg("could not stat input: %s\n",strerror(errno));
 	else if (S_ISBLK(st.st_mode) || S_ISCHR(st.st_mode)) {
-		if (Blocksize % st.st_blksize != 0) {
+		IDevBSize = st.st_blksize;
+		if ((st.st_blksize != 0) && (Blocksize % st.st_blksize != 0)) {
 			warningmsg("Block size is not a multiple of native input size.\n");
 			infomsg("input device's native block-size is %d bytes\n",st.st_blksize);
 			infomsg("transfer block size is %lld\n", Blocksize);
-			infomsg("Adjust block size (option -s) if you get out-of-memory on input.\n");
 		} else {
 			infomsg("input device's native block-size is %d bytes\n",st.st_blksize);
 		}
@@ -2129,33 +1048,26 @@ static void checkBlocksizes(dest_t *dest)
 }
 
 
-static int outputSet()
+static int outputIsSet()
 {
-	if (Dest == 0)
-		return 0;
 	dest_t *d = Dest;
-	do {
-		debugmsg("outputSet: %d\n",d->fd);
-		if (d->fd != -2)
+	while (d) {
+		if (d->fd != -2) {
+			debugmsg("outputIsSet: %d\n",d->fd);
 			return 1;
+		}
 		d = d->next;
-	} while (d);
+	}
+	debugmsg("no output is set\n");
 	return 0;
 }
 
 
 int main(int argc, const char **argv)
 {
-	int optMode = O_EXCL;
-	int optMset = 0, optSset = 0, optBset = 0, watchdogStarted = 0;
-	int numstdout = 0;
-	long mxnrsem;
 	int c, fl, err;
 	sigset_t signalSet;
-	unsigned short netPortIn = 0;
-	unsigned short netPortOut = 0;
 	char *argv0 = strdup(argv[0]), *progname, null;
-	const char *outfile = 0;
 	struct sigaction sig;
 	dest_t *dest = 0;
 
@@ -2173,264 +1085,22 @@ int main(int argc, const char **argv)
 	/* setup parameters */
 	initDefaults();
 	debugmsg("default buffer set to %d blocks of %lld bytes\n",Numblocks,Blocksize);
-	for (c = 1; c < argc; c++) {
-		if (!argcheck("-s",argv,&c,argc)) {
-			Blocksize = Outsize = calcint(argv,c,Blocksize);
-			optSset = 1;
-			debugmsg("Blocksize = %llu\n",Blocksize);
-			if (Blocksize < 100)
-				fatal("cannot set blocksize as percentage of total physical memory\n");
-		} else if (!strcmp("--append",argv[c])) {
-			optMode |= O_APPEND;
-			optMode &= ~O_EXCL;
-			debugmsg("append to next file\n");
-		} else if (!strcmp("--truncate",argv[c])) {
-			optMode |= O_TRUNC;
-			debugmsg("truncate next file\n");
-		} else if (!argcheck("-m",argv,&c,argc)) {
-			Totalmem = calcint(argv,c,Totalmem);
-			optMset = 1;
-			if (Totalmem < 100) {
-#if defined(_SC_AVPHYS_PAGES) && defined(_SC_PAGESIZE) && !defined(__CYGWIN__) || defined(__FreeBSD__)
-				Totalmem = ((unsigned long long) NumP * PgSz * Totalmem) / 100 ;
-#else
-				fatal("Unable to determine page size or amount of available memory - please specify an absolute amount of memory.\n");
-#endif
-			}
-			debugmsg("Totalmem = %lluk\n",Totalmem>>10);
-		} else if (!argcheck("-b",argv,&c,argc)) {
-			long nb = strtol(argv[c],0,0);
-			if ((nb == 0) && (errno == EINVAL)) {
-				errormsg("invalid argument to option -b: \"%s\"\n",argv[c]);
-			} else {
-				Numblocks = nb;
-				optBset = 1;
-			}
-			debugmsg("Numblocks = %llu\n",Numblocks);
-		} else if (!strcmp("--tcpbuffer",argv[c])) {
-			TCPBufSize = calcint(argv,++c,TCPBufSize);
-			debugmsg("TCPBufSize = %lu\n",TCPBufSize);
-		} else if (!strcmp("--tapeaware",argv[c])) {
-			TapeAware = 1;
-			debugmsg("sensing early end-of-tape warning\n");
-		} else if (!argcheck("-d",argv,&c,argc)) {
-#ifdef HAVE_STRUCT_STAT_ST_BLKSIZE
-			SetOutsize = 1;
-			debugmsg("setting output size according to the blocksize of the device\n");
-#else
-			fatal("cannot determine blocksize of device (unsupported by OS)\n");
-#endif
-		} else if (!argcheck("-v",argv,&c,argc)) {
-			/* option has to be checked again, so that the
-			 * command line can override a config file */
-			setVerbose(argv[c]);
-		} else if (!argcheck("-u",argv,&c,argc)) {
-
-			long long p = strtoll(argv[c],0,0);
-			if ((p == 0) && (errno == EINVAL))
-				errormsg("invalid argument to option -u: \"%s\"\n",argv[c]);
-			else
-				Pause = p;
-			debugmsg("Pause = %lldusec\n",Pause);
-		} else if (!argcheck("-r",argv,&c,argc)) {
-			MaxReadSpeed = calcint(argv,c,0);
-			debugmsg("MaxReadSpeed = %lld\n",MaxReadSpeed);
-		} else if (!argcheck("-R",argv,&c,argc)) {
-			MaxWriteSpeed = calcint(argv,c,0);
-			debugmsg("MaxWriteSpeed = %lld\n",MaxWriteSpeed);
-		} else if (!argcheck("-n",argv,&c,argc)) {
-			long nv = strtol(argv[c],0,0);
-			if ((nv < 0) || ((nv == 0) && (errno == EINVAL)))
-				fatal("invalid argument to option -n: \"%s\"\n",argv[c]);
-			else
-				NumVolumes = nv;
-			if (NumVolumes < 0)
-				fatal("argument for number of volumes must be > 0\n");
-			debugmsg("NumVolumes = %d\n",NumVolumes);
-		} else if (!argcheck("-i",argv,&c,argc)) {
-			if (strcmp(argv[c],"-")) {
-				Infile = argv[c];
-				debugmsg("Infile = %s\n",Infile);
-			} else {
-				Infile = STDIN_FILENO;
-				debugmsg("Infile is stdin\n");
-			}
-		} else if (!argcheck("-o",argv,&c,argc)) {
-			dest_t *dest = malloc(sizeof(dest_t));
-			if (strcmp(argv[c],"-")) {
-				debugmsg("output file: %s\n",argv[c]);
-				dest->arg = argv[c];
-				dest->name = argv[c];
-				dest->fd = -1;
-				dest->mode = O_CREAT|O_WRONLY|optMode|Direct|LARGEFILE|OptSync;
-			} else {
-				if (numstdout++) 
-					fatal("cannot output multiple times to stdout\n");
-				debugmsg("output to stdout\n",argv[c]);
-				dest->fd = dup(STDOUT_FILENO);
-				err = dup2(STDERR_FILENO,STDOUT_FILENO);
-				assert(err != -1);
-				dest->arg = "<stdout>";
-				dest->name = "<stdout>";
-				dest->mode = 0;
-			}
-			optMode = O_EXCL;
-			dest->port = 0;
-			dest->result = 0;
-			bzero(&dest->thread,sizeof(dest->thread));
-			dest->next = Dest;
-			Dest = dest;
-			if (outfile == 0)
-				outfile = argv[c];
-			++NumSenders;
-#ifdef AF_INET6
-		} else if (!strcmp("-0",argv[c])) {
-			AddrFam = AF_UNSPEC;
-		} else if (!strcmp("-4",argv[c])) {
-			AddrFam = AF_INET;
-		} else if (!strcmp("-6",argv[c])) {
-			AddrFam = AF_INET6;
-#endif
-		} else if (!argcheck("-I",argv,&c,argc)) {
-			initNetworkInput(argv[c]);
-		} else if (!argcheck("-O",argv,&c,argc)) {
-			dest_t *d = createNetworkOutput(argv[c]);
-			if (d->fd == -1) {
-				free(d);
-			} else {
-				d->next = Dest;
-				Dest = d;
-				++NumSenders;
-			}
-		} else if (!argcheck("-T",argv,&c,argc)) {
-			Tmpfile = strdup(argv[c]);
-			if (!Tmpfile)
-				fatal("out of memory\n");
-			Memmap = 1;
-			debugmsg("Tmpfile = %s\n",Tmpfile);
-		} else if (!strcmp("-t",argv[c])) {
-			Memmap = 1;
-			debugmsg("Memmap = 1\n");
-		} else if (!argcheck("-l",argv,&c,argc)) {
-			Log = open(argv[c],O_WRONLY|O_APPEND|O_TRUNC|O_CREAT|LARGEFILE,0666);
-			if (-1 == Log) {
-				Log = STDERR_FILENO;
-				errormsg("error opening log file: %s\n",strerror(errno));
-			}
-			debugmsg("logFile set to %s\n",argv[c]);
-		} else if (!strcmp("-f",argv[c])) {
-			optMode &= ~O_EXCL;
-			debugmsg("overwrite = 1\n");
-		} else if (!strcmp("-q",argv[c])) {
-			debugmsg("disabling display of status\n");
-			Quiet = 1;
-		} else if (!strcmp("-Q",argv[c])) {
-			debugmsg("disabling logging of status\n");
-			StatusLog = 0;
-		} else if (!strcmp("-c",argv[c])) {
-			debugmsg("enabling full synchronous I/O\n");
-			OptSync = O_SYNC;
-		} else if (!strcmp("-e",argv[c])) {
-			debugmsg("will terminate on any kind of error\n");
-			ErrorsFatal = 1;
-		} else if (!argcheck("-a",argv,&c,argc)) {
-			long at = strtol(argv[c],0,0) - 1;
-			if ((at == 0) && (errno == EINVAL)) 
-				errormsg("invalid argument to option -a: \"%s\"\n",argv[c]);
-			else {
-				Autoloader = 1;
-				AutoloadTime = at;
-			}
-			debugmsg("Autoloader time = %d\n",AutoloadTime);
-		} else if (!argcheck("-A",argv,&c,argc)) {
-			Autoloader = 1;
-			AutoloadCmd = argv[c];
-			debugmsg("Autoloader command = \"%s\"\n", AutoloadCmd);
-		} else if (!argcheck("-P",argv,&c,argc)) {
-			if (1 != sscanf(argv[c],"%lf",&StartWrite))
-				StartWrite = 0;
-			StartWrite /= 100;
-			if ((StartWrite > 1) || (StartWrite <= 0))
-				fatal("error in argument -P: must be bigger than 0 and less or equal 100\n");
-			debugmsg("StartWrite = %1.2lf\n",StartWrite);
-		} else if (!argcheck("-p",argv,&c,argc)) {
-			if (1 == sscanf(argv[c],"%lf",&StartRead))
-				StartRead /= 100;
-			else
-				StartRead = 1.0;
-			if ((StartRead >= 1) || (StartRead < 0))
-				fatal("error in argument -p: must be bigger or equal to 0 and less than 100\n");
-			debugmsg("StartRead = %1.2lf\n",StartRead);
-		} else if (!strcmp("-L",argv[c])) {
-#ifdef _POSIX_MEMLOCK_RANGE
-			Memlock = 1;
-			debugmsg("memory locking enabled\n");
-#else
-			warning("POSIX memory locking is unsupported on this system.\n");
-#endif
-		} else if (!argcheck("-W",argv,&c,argc)) {
-			Timeout = strtol(argv[c],0,0);
-			if (Timeout <= 0)
-				fatal("invalid argument to option -W\n");
-			if (Timeout <= AutoloadTime)
-				fatal("timeout must be bigger than autoload time\n");
-			err = pthread_create(&Watchdog,0,&watchdogThread,(void*)0);
-			assert(0 == err);
-			infomsg("started watchdog with Timeout = %lu sec.\n",Timeout);
-			watchdogStarted = 1;
-		} else if (!strcmp("--direct",argv[c])) {
-#ifdef O_DIRECT
-			debugmsg("using O_DIRECT to open file descriptors\n");
-			Direct = O_DIRECT;
-#else
-			warningmsg("--direct is unsupported on this system\n");
-#endif
-		} else if (!strcmp("--help",argv[c]) || !strcmp("-h",argv[c])) {
-			usage();
-		} else if (!strcmp("--version",argv[c]) || !strcmp("-V",argv[c])) {
-			version();
-		} else if (!strcmp("--md5",argv[c]) || !strcmp("-H",argv[c])) {
-#ifdef HAVE_MD5
-			if (addHashAlgorithm("MD5")) {
-				++Hashers;
-				++NumSenders;
-			}
-#else
-			fatal("hash calculation support has not been compiled in!\n");
-#endif
-		} else if (!strcmp("--hash",argv[c])) {
-			++c;
-			if (c == argc)
-				fatal("missing argument to option --hash\n");
-			if (!strcmp(argv[c],"list")) {
-				listHashAlgos();
-				exit(EXIT_SUCCESS);
-			}
-			if (addHashAlgorithm(argv[c])) {
-				++Hashers;
-				++NumSenders;
-			}
-		} else if (!strcmp("--pid",argv[c])) {
-			printmsg("PID is %d\n",getpid());
-		} else if (!argcheck("-D",argv,&c,argc)) {
-			OutVolsize = calcint(argv,c,0);
-			debugmsg("OutVolsize = %llu\n",OutVolsize);
-		} else
-			fatal("unknown option \"%s\"\n",argv[c]);
-	}
+	for (c = 1; c < argc; c++)
+		c = parseOption(c,argc,argv);
 
 	/* consistency check for options */
 	if (AutoloadTime && Timeout && Timeout <= AutoloadTime)
 		fatal("autoload time must be smaller than watchdog timeout\n");
-	if (optBset&optSset&optMset) {
+	if (Options == (OPTION_B|OPTION_M|OPTION_S)) {
+		/* options -m -b -s set */
 		if (Numblocks * Blocksize != Totalmem)
 			fatal("inconsistent options: blocksize * number of blocks != totalsize!\n");
-	} else if (((!optBset)&optSset&optMset) || (optMset&(!optBset)&(!optSset))) {
+	} else if ((Options == (OPTION_S|OPTION_M)) || (Options == OPTION_M)) {
 		if (Totalmem <= Blocksize)
 			fatal("total memory must be larger than block size\n");
 		Numblocks = Totalmem / Blocksize;
 		infomsg("Numblocks = %llu, Blocksize = %llu, Totalmem = %llu\n",(unsigned long long)Numblocks,(unsigned long long)Blocksize,(unsigned long long)Totalmem);
-	} else if (optBset&!optSset&optMset) {
+	} else if (Options == (OPTION_B|OPTION_M)) {
 		if (Blocksize == 0)
 			fatal("blocksize must be greater than 0\n");
 		if (Totalmem <= Blocksize)
@@ -2443,52 +1113,27 @@ int main(int argc, const char **argv)
 	if ((NumSenders-Hashers > 0) && (Autoloader || OutVolsize))
 		fatal("multi-volume support is unsupported with multiple outputs\n");
 	if (Autoloader) {
-		if ((!outfile) && (!Infile))
+		if ((!OutFile) && (!Infile))
 			fatal("Setting autoloader time or command without using a device doesn't make any sense!\n");
-		if (outfile && Infile) {
+		if (OutFile && Infile) {
 			fatal("Which one is your autoloader? Input or output? Replace input or output with a pipe.\n");
 		}
 	}
-	if (Infile && netPortIn)
-		fatal("Setting both network input port and input file doesn't make sense!\n");
-	if (outfile && netPortOut)
-		fatal("Setting both network output and output file doesn't make sense!\n");
 
 	/* multi volume input consistency checking */
 	if ((NumVolumes != 1) && (!Infile))
 		fatal("multi volume support for input needs an explicit given input device (option -i)\n");
 
 	/* SPW: Volsize consistency checking */
-	if (OutVolsize && !outfile)
+	if (OutVolsize && !OutFile)
 		fatal("Setting OutVolsize without an output device doesn't make sense!\n");
 	if ((OutVolsize != 0) && (OutVolsize < Blocksize))
 		/* code assumes we can write at least one block */
 		fatal("If non-zero, OutVolsize must be at least as large as the buffer blocksize (%llu)!\n",Blocksize);
 	/* SPW END */
 
-	/* check that we stay within system limits */
-#ifdef __FreeBSD__
-	{
-		size_t semvmx_size = sizeof(mxnrsem);
-		if (sysctlbyname("kern.ipc.semvmx", &mxnrsem, &semvmx_size, 0, 0) == -1)
-			mxnrsem = -1;
-	}
-#else
-	mxnrsem = sysconf(_SC_SEM_VALUE_MAX);
-#endif
-	if (-1 == mxnrsem) {
-#ifdef SEM_MAX_VALUE
-		mxnrsem = SEM_MAX_VALUE;
-#else
-		mxnrsem = LONG_MAX;
-		warningmsg("unable to determine maximum value of semaphores\n");
-#endif
-	}
 	if (Numblocks < 5)
 		fatal("Minimum block count is 5.\n");
-	if (Numblocks > mxnrsem) {
-		fatal("cannot allocate more than %d blocks.\nThis is a system dependent limit, depending on the maximum semaphore value.\nPlease choose a bigger block size.\n",mxnrsem);
-	}
 
 	initBuffer();
 
@@ -2499,7 +1144,7 @@ int main(int argc, const char **argv)
 		fatal("Error creating semaphore Dev2Buf: %s\n",strerror(errno));
 
 	openInput();
-	if (!outputSet()) {
+	if (!outputIsSet()) {
 		debugmsg("no output set - adding stdout as destination\n");
 		dest_t *d = malloc(sizeof(dest_t));
 		d->fd = dup(STDOUT_FILENO);
@@ -2515,9 +1160,8 @@ int main(int argc, const char **argv)
 		++NumSenders;
 	}
 	openDestinationFiles(Dest);
-	if (NumSenders == -1) {
+	if (NumSenders == -1)
 		fatal("no output left - nothing to do\n");
-	}
 
 	sig.sa_handler = SIG_IGN;
 	sigemptyset(&sig.sa_mask);
@@ -2527,11 +1171,13 @@ int main(int argc, const char **argv)
 	fl = fcntl(STDERR_FILENO,F_GETFL);
 	err = fcntl(STDERR_FILENO,F_SETFL,fl | O_NONBLOCK);
 	assert(err == 0);
-	if ((read(STDERR_FILENO,&c,1) == -1) && (errno != EAGAIN)) {
+	if ((read(STDERR_FILENO,&c,1) != -1) || (errno == EAGAIN)) {
+		Terminal = 1;
+	} else {
 		int tty = open("/dev/tty",O_RDWR);
 		if (-1 == tty) {
 			Terminal = 0;
-			if ((Autoloader == 0) && (outfile))
+			if ((Autoloader == 0) && (OutFile))
 				warningmsg("No controlling terminal and no autoloader command specified.\n");
 		} else {
 			Terminal = 1;
@@ -2539,11 +1185,7 @@ int main(int argc, const char **argv)
 			assert(err != -1);
 		}
 	}
-	if (Terminal) {
-		debugmsg("found controlling terminal\n");
-	} else {
-		debugmsg("no access to controlling terminal available\n");
-	}
+	debugmsg(Terminal ? "found controlling terminal\n" : "no access to controlling terminal available\n");
 	err = fcntl(STDERR_FILENO,F_SETFL,fl);
 	assert(err == 0);
 	if ((Terminal == 1) && (NumVolumes != 1)) {
@@ -2604,8 +1246,8 @@ int main(int argc, const char **argv)
 		TermQ[0] = -1;
 		TermQ[1] = -1;
 	}
-	if (!watchdogStarted && Timeout) {
-		err = pthread_create(&Watchdog,0,&watchdogThread,(void*)0);
+	if ((Watchdog == 0) && (Timeout != 0)) {
+		err = pthread_create(&WatchdogThr,0,&watchdogThread,(void*)0);
 		assert(0 == err);
 		infomsg("started watchdog with Timeout = %lu sec.\n",Timeout);
 	}
@@ -2616,11 +1258,11 @@ int main(int argc, const char **argv)
 	err = pthread_create(&dest->thread,0,&outputThread,dest);
 	assert(0 == err);
 	if (Status) {
-		err = pthread_create(&Reader,0,&inputThread,0);
+		err = pthread_create(&ReaderThr,0,&inputThread,0);
 		assert(0 == err);
 		(void) pthread_sigmask(SIG_UNBLOCK, &signalSet, NULL);
 		statusThread();
-		err = pthread_join(Reader,0);
+		err = pthread_join(ReaderThr,0);
 		if (err != 0)
 			errormsg("error joining reader: %s\n",strerror(errno));
 	} else {

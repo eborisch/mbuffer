@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2009, Thomas Maier-Komor
+ *  Copyright (C) 2000-2017, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -17,10 +17,26 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef NETWORK_H
-#define NETWORK_H
+#ifndef COMMON_H
+#define COMMON_H
 
-void initNetworkInput(const char *addr);
-struct destination *createNetworkOutput(const char *addr);
+#include <sys/time.h>
+
+#ifdef __sun
+#include <synch.h>
+#define sem_t sema_t
+#define sem_init(a,b,c) sema_init(a,c,USYNC_THREAD,0)
+#define sem_post sema_post
+#define sem_getvalue(a,b) ((*(b) = (a)->count), 0)
+#if defined(__SunOS_5_8) || defined(__SunOS_5_9)
+#define sem_wait SemWait
+#else
+#define sem_wait sema_wait
+#endif
+#endif
+
+int mt_usleep(unsigned long long sleep_usecs);
+long long enforceSpeedLimit(unsigned long long limit, long long num, struct timespec *last);
+void releaseLock(void *l);
 
 #endif

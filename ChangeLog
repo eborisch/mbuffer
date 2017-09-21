@@ -1,3 +1,12 @@
+20170921:
+- added jumpbuffer reading mode for inconsistent block sizes
+- code separation into more files for enhanced readability
+- some cleanup work for global variables
+- fixed regression in sanity checks
+- fix: option -f should truncate output file
+- fix: failed opening of network output should not redirect to stdout
+- fix: summary printout should respect quiet options
+
 20170806:
 - add support for libgcrypt
 - add support for tape aware out-of-space handling

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2009, Thomas Maier-Komor
+ *  Copyright (C) 2000-2017, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -17,10 +17,10 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef NETWORK_H
-#define NETWORK_H
+#ifndef INPUT_H
+#define INPUT_H
 
-void initNetworkInput(const char *addr);
-struct destination *createNetworkOutput(const char *addr);
+void *inputThread(void *ignored);
+void openInput();
 
 #endif

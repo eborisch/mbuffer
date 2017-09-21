@@ -31,7 +31,6 @@ void *alloca(size_t);
 #endif
 
 
-#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,16 +39,16 @@ void *alloca(size_t);
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <unistd.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
 #include "dest.h"
+#include "globals.h"
 #include "network.h"
+#include "settings.h"
 #include "log.h"
 
-extern int In;
 int32_t TCPBufSize = (int32_t)1 << 20;
 #if defined(PF_INET6) && defined(PF_UNSPEC)
 int AddrFam = PF_UNSPEC;
@@ -98,6 +97,10 @@ void initNetworkInput(const char *addr)
 	int err, sock = -1, l;
 
 	debugmsg("initNetworkInput(\"%s\")\n",addr);
+	if (Infile != 0)
+		fatal("cannot initialize input from network - input from file already set\n");
+	if (In != -1)
+		fatal("cannot initialize input from network - input already set\n");
 	l = strlen(addr) + 1;
 	host = alloca(l);
 	memcpy(host,addr,l);

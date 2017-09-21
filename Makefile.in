@@ -19,10 +19,10 @@ RM		= @RM@
 INSTALL		= @INSTALL@
 
 TARGET		= mbuffer$(EXE)
-SOURCES		= log.c network.c mbuffer.c hashing.c
+SOURCES		= log.c network.c mbuffer.c hashing.c input.c common.c settings.c globals.c
 OBJECTS		= $(SOURCES:.c=.o)
 
-TESTTREE	= /usr/lib/gcc
+TESTTREE	= .
 
 .PHONY: clean all distclean install check testcleanup
 
@@ -55,7 +55,7 @@ install: $(TARGET) $(DESTDIR)$(etcdir) $(DESTDIR)$(etcdir)/mbuffer.rc
 lint:
 	lint $(DEFS) $(SOURCES)
 
-check: $(TARGET) test0 test1 test2 test3 test4 test5 testcleanup
+check: $(TARGET) test0 test1 test2 test3 test4 test5
 
 testcleanup:
 	rm -f test0 test1 test2 test3 test4 test5 \
@@ -132,5 +132,11 @@ test5: test.md5 tapetest.so
 	diff $@.md5 test.md5
 	touch $@
 
+test6: mbuffer idev.so
+	LD_PRELOAD=./idev.so BSIZE=317 IDEV=mbuffer ./mbuffer -s256 -i mbuffer -f -o mbuffer2
+
 tapetest.so: tapetest.c
 	$(CC) -shared -fPIC $< -o $@ -ldl
+
+idev.so: idev.c
+	$(CC) -shared -g -fPIC $< -o $@ -ldl
