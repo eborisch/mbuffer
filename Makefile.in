@@ -22,7 +22,7 @@ TARGET		= mbuffer$(EXE)
 SOURCES		= log.c network.c mbuffer.c hashing.c input.c common.c settings.c globals.c
 OBJECTS		= $(SOURCES:.c=.o)
 
-TESTTREE	= .
+TESTTREE	= /bin /sbin
 
 .PHONY: clean all distclean install check testcleanup
 
@@ -40,10 +40,10 @@ distclean: clean
 	-$(RM) $(TARGET) config.h config.log \
 	config.status Makefile mbuffer.1 core
 
-$(DESTDIR)$(prefix)/etc:
+$(DESTDIR)$(etcdir):
 	-$(INSTALL) -d -m 755 $@
 
-$(DESTDIR)$(prefix)/etc/mbuffer.rc:
+$(DESTDIR)$(etcdir)/mbuffer.rc:
 	$(INSTALL) -m 644 mbuffer.rc $(DESTDIR)$(etcdir)
 
 install: $(TARGET) $(DESTDIR)$(etcdir) $(DESTDIR)$(etcdir)/mbuffer.rc
@@ -83,10 +83,10 @@ test1: test.md5
 	touch $@
 
 test2: test.md5
-	./mbuffer -q -I :8000 -o $@.tar -o - | openssl md5 > $@.md5 & \
+	./mbuffer --pid -q -4 -I :7001 -o $@.tar -o - | openssl md5 > $@.md5 & \
 		sleep 1; \
 		rm -f $@.tar; \
-		./mbuffer -i test.tar -o /dev/null -O localhost:8000 -H; \
+		./mbuffer --pid -i test.tar -o /dev/null -4 -O localhost:7001 -H; \
 		wait
 	sync
 	diff $@.md5 test.md5
@@ -98,10 +98,10 @@ test2: test.md5
 	touch $@
 
 test3: test.md5
-	./mbuffer -q -6 -I :8000 | openssl md5 > $@.md5 & \
+	./mbuffer --pid -q -6 -I :7002 | openssl md5 > $@.md5 & \
 		sleep 1; \
 		rm -f $@.tar; \
-		./mbuffer -i test.tar -o /dev/null -6 -O ip6-localhost:8000 -o $@.tar -H; \
+		./mbuffer --pid -i test.tar -o /dev/null -6 -O ::1:7002 -o $@.tar -H; \
 		wait
 	sync
 	diff $@.md5 test.md5
@@ -112,31 +112,33 @@ test3: test.md5
 	diff $@.md5 test.md5
 	touch $@
 
+mbuffer.md5: mbuffer
+	cat mbuffer | openssl md5 > mbuffer.md5
+
 # Multi-volume test
-test4: test.md5 tapetest.so
+test4: test.md5 tapetest.so mbuffer.md5
 	rm -f output-$@.tar.*
-	cat test.tar | LD_PRELOAD=$(PWD)/tapetest.so ./mbuffer -f -o output-$@.tar -H -A "echo '[$@] Replacing tape'"
-	cat output-$@.tar.* | openssl md5 > $@.md5
-	rm -f output-$@.tar.*
+	cat mbuffer | LD_PRELOAD=./tapetest.so ./mbuffer -f -o output-$@ -H -A "echo '[$@] Replacing tape'"
+	cat output-$@* | openssl md5 > $@.md5
+	rm -f output-$@.*
 	sync
-	diff $@.md5 test.md5
-	touch $@
+	diff $@.md5 mbuffer.md5 > $@
 
 # Multi-volume test with --tapeaware
-test5: test.md5 tapetest.so
+test5: test.md5 tapetest.so mbuffer.md5
 	rm -f output-$@.tar.*
-	cat test.tar | LD_PRELOAD=$(PWD)/tapetest.so ./mbuffer -f -o output-$@.tar -H -A "echo '[$@] Replacing tape'" --tapeaware
-	cat output-$@.tar.* | openssl md5 > $@.md5
-	rm -f output-$@.tar.*
+	cat mbuffer | LD_PRELOAD=./tapetest.so ./mbuffer -f -o output-$@ -H -A "echo '[$@] Replacing tape'" --tapeaware
+	cat output-$@.* | openssl md5 > $@.md5
+	rm -f output-$@.*
 	sync
-	diff $@.md5 test.md5
-	touch $@
+	diff $@.md5 mbuffer.md5 > $@
+
 
 test6: mbuffer idev.so
 	LD_PRELOAD=./idev.so BSIZE=317 IDEV=mbuffer ./mbuffer -s256 -i mbuffer -f -o mbuffer2
 
 tapetest.so: tapetest.c
-	$(CC) -shared -fPIC $< -o $@ -ldl
+	$(CC) $(CFLAGS) -shared -fPIC tapetest.c -o $@ $(LIBS)
 
 idev.so: idev.c
-	$(CC) -shared -g -fPIC $< -o $@ -ldl
+	$(CC) $(CFLAGS) -shared -g -fPIC idev.c -o $@ $(LIBS)

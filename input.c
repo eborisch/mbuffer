@@ -21,6 +21,7 @@
 #include "input.h"
 #include "common.h"
 #include "log.h"
+#include "dest.h"
 #include "globals.h"
 #include "settings.h"
 
@@ -41,7 +42,7 @@
 
 
 #ifdef __sun
-#define waitInput
+#define waitInput()
 #else
 static void waitInput(void)
 {

@@ -867,13 +867,12 @@ static void openDestinationFiles(dest_t *d)
 				d->result = strerror(errno);
 				errormsg("unable to open output %s: %s\n",d->arg,strerror(errno));
 			} else {
+				++NumSenders;
 				debugmsg("successfully opened destination file %s with fd %d\n",d->arg,d->fd);
 			}
 		}
-		if (-1 == d->fd) {
+		if (-1 == d->fd)
 			d->name = 0;	/* tag destination as unstartable */
-			--NumSenders;
-		}
 #ifdef __sun
 		else if (d->arg) {
 			if (0 == directio(d->fd,DIRECTIO_ON))
@@ -885,7 +884,7 @@ static void openDestinationFiles(dest_t *d)
 		d = d->next;
 	}
 	if (ErrorOccurred != errs)
-		fatal("unable to open all outputs\n");
+		warningmsg("unable to open all outputs\n");
 }
 
 
@@ -1246,6 +1245,7 @@ int main(int argc, const char **argv)
 		TermQ[0] = -1;
 		TermQ[1] = -1;
 	}
+	infomsg("%u senders, %u hashers\n",NumSenders,Hashers);
 	if ((Watchdog == 0) && (Timeout != 0)) {
 		err = pthread_create(&WatchdogThr,0,&watchdogThread,(void*)0);
 		assert(0 == err);

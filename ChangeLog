@@ -1,3 +1,12 @@
+20171011:
+- use $(etcdir) consistently for installation
+- use AC_COMPILE_IF instead of AC_RUN_IF to support cross-compiling
+- remove forward typedef for dest_t to support older compilers
+- build fix for Solaris
+- updated test infrastructure
+- print pid on every message with --pid
+- fix: potential hang, when one output fails to open
+
 20170921:
 - added jumpbuffer reading mode for inconsistent block sizes
 - code separation into more files for enhanced readability

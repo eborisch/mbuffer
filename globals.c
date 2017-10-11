@@ -17,6 +17,7 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "dest.h"
 #include "globals.h"
 #include <fcntl.h>
 #include <sys/time.h>

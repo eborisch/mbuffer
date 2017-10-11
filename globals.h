@@ -23,8 +23,6 @@
 #include <pthread.h>
 #include <semaphore.h>
 
-typedef struct destination dest_t;
-
 extern dest_t *Dest;
 
 #define OPTION_B 1

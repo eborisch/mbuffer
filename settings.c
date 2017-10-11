@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <sys/socket.h>	// for PF_INET6
 #include <sys/stat.h>
@@ -784,6 +785,7 @@ int parseOption(int c, int argc, const char **argv)
 			dest->arg = "<stdout>";
 			dest->name = "<stdout>";
 			dest->mode = 0;
+			++NumSenders;
 		}
 		OptMode = O_EXCL;
 		dest->port = 0;
@@ -793,7 +795,6 @@ int parseOption(int c, int argc, const char **argv)
 		Dest = dest;
 		if (OutFile == 0)
 			OutFile = argv[c];
-		++NumSenders;
 #ifdef AF_INET6
 	} else if (!strcmp("-0",argv[c])) {
 		AddrFam = AF_UNSPEC;
@@ -808,7 +809,8 @@ int parseOption(int c, int argc, const char **argv)
 		dest_t *d = createNetworkOutput(argv[c]);
 		d->next = Dest;
 		Dest = d;
-		++NumSenders;
+		if (d->fd != -1)
+			++NumSenders;
 	} else if (!argcheck("-T",argv,&c,argc)) {
 		Tmpfile = strdup(argv[c]);
 		if (!Tmpfile)
@@ -921,7 +923,12 @@ int parseOption(int c, int argc, const char **argv)
 			++NumSenders;
 		}
 	} else if (!strcmp("--pid",argv[c])) {
-		printmsg("PID is %d\n",getpid());
+		int pid = getpid();
+		printmsg("PID is %d\n",pid);
+		int n = snprintf(0,0,"%s (%d): ",argv[0],pid);
+		Prefix = realloc(Prefix,n+1);
+		snprintf(Prefix,n+1,"%s (%d): ",argv[0],pid);
+		PrefixLen = n;
 	} else if (!argcheck("-D",argv,&c,argc)) {
 		OutVolsize = calcint(argv,c,0);
 		debugmsg("OutVolsize = %llu\n",OutVolsize);

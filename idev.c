@@ -68,7 +68,7 @@ ssize_t read(int fd,void *buf, size_t s)
 	if (BSize == 0)
 		BSize = strtol(getenv("BSIZE"),0,0);
 	if (s < BSize) {
-		fprintf(stderr,"idev.so: read(%d,%p,%u<%u) = ENOMEM\n",fd,buf,s,BSize);
+		fprintf(stderr,"idev.so: read(%d,%p,%lu<%lu) = ENOMEM\n",fd,buf,s,BSize);
 		fflush(stderr);
 		errno = ENOMEM;
 		return -1;
