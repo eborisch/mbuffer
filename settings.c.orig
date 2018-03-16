@@ -39,6 +39,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef __FreeBSD__
+#include <sys/sysctl.h>
+#endif
+
 
 typedef enum { off, on, invalid } flag_t;
 
@@ -394,7 +398,13 @@ void initBuffer()
 	long mxnrsem;
 
 	/* check that we stay within system limits */
+#ifdef __FreeBSD__
+	size_t semvmx_size = sizeof(mxnrsem);
+	if (sysctlbyname("kern.ipc.semvmx", &mxnrsem, &semvmx_size, 0, 0) == -1)
+		mxnrsem = -1;
+#else
 	mxnrsem = sysconf(_SC_SEM_VALUE_MAX);
+#endif
 	if (-1 == mxnrsem) {
 #ifdef SEM_MAX_VALUE
 		mxnrsem = SEM_MAX_VALUE;

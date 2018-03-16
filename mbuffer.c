@@ -42,6 +42,10 @@ typedef int caddr_t;
 #include <sys/stat.h>
 #include <termios.h>
 
+#ifdef __FreeBSD__
+#include <sys/vmmeter.h>
+#endif
+
 
 #ifdef HAVE_SENDFILE
 #ifdef HAVE_SENDFILE_H
@@ -956,9 +960,16 @@ static void initDefaults()
 		debugmsg("total # of phys pages: %li\n",NumP);
 	}
 #elif defined(__FreeBSD__)
-	size_t nump_size = sizeof(nump_size);
-	sysctlbyname("hw.availpages", &NumP, &nump_size, NULL, 0);
+	/* Get free memory average */
+	struct vmtotal vmt;
+	size_t vmt_size = sizeof(vmt);
+	if (sysctlbyname("vm.vmtotal", &vmt, &vmt_size, NULL, 0) < 0)
+		fatal("Unable to read vm.vmtotal");
+	if (vmt_size != sizeof(vmt))
+		fatal("Unable to read (wrong size) vm.vmtotal");
+	NumP = vmt.t_free;
 #endif
+	long mxnrsem = sysconf(_SC_SEM_VALUE_MAX);
 
 #ifdef _SC_PAGESIZE
 	PgSz = sysconf(_SC_PAGESIZE);
@@ -972,6 +983,8 @@ static void initDefaults()
 		Blocksize = PgSz;
 		debugmsg("Blocksize set to physical page size of %u bytes\n",PgSz);
 		Numblocks = NumP/50;
+		if (mxnrsem < Numblocks)
+			Numblocks = mxnrsem;
 		debugmsg("set Numblocks to %u\n",Numblocks);
 	}
 
