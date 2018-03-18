@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2017, Thomas Maier-Komor
+ *  Copyright (C) 2000-2018, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -42,6 +42,9 @@ typedef int caddr_t;
 #include <sys/stat.h>
 #include <termios.h>
 
+#ifdef __FreeBSD__
+#include <sys/vmmeter.h>
+#endif
 
 #ifdef HAVE_SENDFILE
 #ifdef HAVE_SENDFILE_H
@@ -76,7 +79,7 @@ typedef int caddr_t;
 
 static int kb2str(char *s, double v)
 {
-	const char *dim = "KMGT", *f;
+	const char *dim = "kMGT", *f;
 
 	while (v > 10000.0) {
 		v /= 1024.0;
@@ -97,7 +100,6 @@ static int kb2str(char *s, double v)
 		f = "%5.lg ";
 	return sprintf(s,f,v,*dim);
 }
-
 
 
 static void summary(unsigned long long numb, int numthreads)
@@ -122,7 +124,7 @@ static void summary(unsigned long long numb, int numthreads)
 	else
 		msg += sprintf(msg,"summary: ");
 	msg += kb2str(msg,numb);
-	msg += sprintf(msg,"Byte in ");
+	msg += sprintf(msg,"iByte in ");
 	if (h > 0)
 		msg += sprintf(msg,"%dh %02dmin %04.1fsec - average of ",h,m,secs);
 	else if (m > 0)
@@ -130,7 +132,7 @@ static void summary(unsigned long long numb, int numthreads)
 	else
 		msg += sprintf(msg,"%4.1fsec - average of ",secs);
 	msg += kb2str(msg,av);
-	msg += sprintf(msg,"B/s");
+	msg += sprintf(msg,"iB/s");
 	if (EmptyCount != 0)
 		msg += sprintf(msg,", %dx empty",EmptyCount);
 	if (FullCount != 0)
@@ -284,14 +286,14 @@ static void statusThread(void)
 		b += sprintf(b,"\rin @ ");
 		b += kb2str(b,in);
 		numsender = NumSenders + MainOutOK - Hashers;
-		b += sprintf(b,"B/s, out @ ");
+		b += sprintf(b,"iB/s, out @ ");
 		b += kb2str(b, out * numsender);
 		if (numsender != 1)
-			b += sprintf(b,"B/s, %d x ",numsender);
+			b += sprintf(b,"iB/s, %d x ",numsender);
 		else
-			b += sprintf(b,"B/s, ");
+			b += sprintf(b,"iB/s, ");
 		b += kb2str(b,total);
-		b += sprintf(b,"B total, buffer %3.0f%% full",fill);
+		b += sprintf(b,"iB total, buffer %3.0f%% full",fill);
 		if (InSize != 0) {
 			double done = (double)Numout*Blocksize/(double)InSize*100;
 			b += sprintf(b,", %3.0f%% done",done);
@@ -947,18 +949,39 @@ static void initDefaults()
 {
 	/* gather system parameters */
 	TickTime = 1000000 / sysconf(_SC_CLK_TCK);
-#if defined(_SC_AVPHYS_PAGES)
-	NumP = sysconf(_SC_AVPHYS_PAGES);
+
+	/* get physical memory size */
+#if defined(_SC_PHYS_PAGES)
+	NumP = sysconf(_SC_PHYS_PAGES);
 	if (NumP < 0) {
-		warningmsg("unable to determine number of available memory pages: %s\n",strerror(errno));
+		warningmsg("unable to determine number of total memory pages: %s\n",strerror(errno));
 		NumP = 0;
 	} else {
-		debugmsg("total # of phys pages: %li\n",NumP);
+		debugmsg("Physical memory (in pages) : %li\n",NumP);
+	}
+#endif
+
+	/* get number of available free pages */
+	AvP = 0;
+#if defined(_SC_AVPHYS_PAGES)
+	AvP = sysconf(_SC_AVPHYS_PAGES);
+	if (AvP < 0) {
+		warningmsg("unable to determine number of available pages: %s\n",strerror(errno));
+		AvP = 0;
 	}
 #elif defined(__FreeBSD__)
-	size_t nump_size = sizeof(nump_size);
-	sysctlbyname("hw.availpages", &NumP, &nump_size, NULL, 0);
+	struct vmtotal vmt;
+	size_t vmt_size = sizeof(vmt);
+	if ((sysctlbyname("vm.vmtotal", &vmt, &vmt_size, NULL, 0) < 0) || (vmt_size != sizeof(vmt))) {
+		warningmsg("unable to determine number of available pages: %s\n",strerror(errno));
+	} else {
+		AvP = vmt.t_free;
+	}
+#else
+	warningmsg("no mechanism to determine number of available pages\n",strerror(errno));
 #endif
+	if (AvP)
+		debugmsg("Available memory (in pages): %li\n",AvP);
 
 #ifdef _SC_PAGESIZE
 	PgSz = sysconf(_SC_PAGESIZE);
@@ -970,9 +993,14 @@ static void initDefaults()
 
 	if (NumP && PgSz) {
 		Blocksize = PgSz;
-		debugmsg("Blocksize set to physical page size of %u bytes\n",PgSz);
+		debugmsg("Blocksize set to physical page size of %ld bytes\n",PgSz);
 		Numblocks = NumP/50;
-		debugmsg("set Numblocks to %u\n",Numblocks);
+		long mxsemv = maxSemValue();
+		while ((Numblocks > mxsemv) || (Numblocks > 200)) {
+			Numblocks >>= 1;
+			Blocksize <<= 1;
+		}
+		debugmsg("default Numblocks = %lu, default Blocksize = %llu\n",Numblocks,Blocksize);
 	}
 
 #if defined(_POSIX_MONOTONIC_CLOCK) && (_POSIX_MONOTONIC_CLOCK >= 0) && defined(CLOCK_MONOTONIC)
@@ -1095,8 +1123,8 @@ int main(int argc, const char **argv)
 		if (Numblocks * Blocksize != Totalmem)
 			fatal("inconsistent options: blocksize * number of blocks != totalsize!\n");
 	} else if ((Options == (OPTION_S|OPTION_M)) || (Options == OPTION_M)) {
-		if (Totalmem <= Blocksize)
-			fatal("total memory must be larger than block size\n");
+		if (Totalmem < (Blocksize*5))
+			fatal("total memory must be large enough for 5 blocks\n");
 		Numblocks = Totalmem / Blocksize;
 		infomsg("Numblocks = %llu, Blocksize = %llu, Totalmem = %llu\n",(unsigned long long)Numblocks,(unsigned long long)Blocksize,(unsigned long long)Totalmem);
 	} else if (Options == (OPTION_B|OPTION_M)) {

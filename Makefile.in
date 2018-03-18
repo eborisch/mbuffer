@@ -17,12 +17,13 @@ etcdir		= @sysconfdir@
 
 RM		= @RM@
 INSTALL		= @INSTALL@
+TAR		= @TAR@
 
 TARGET		= mbuffer$(EXE)
 SOURCES		= log.c network.c mbuffer.c hashing.c input.c common.c settings.c globals.c
 OBJECTS		= $(SOURCES:.c=.o)
 
-TESTTREE	= /bin /sbin
+TESTTREE	= /bin /usr/bin
 
 .PHONY: clean all distclean install check testcleanup
 
@@ -63,7 +64,7 @@ testcleanup:
 		test.tar test.md5 tapetest.so
 
 test.tar:
-	tar cf test.tar $(TESTTREE)
+	$(TAR) cf test.tar --ignore-failed-read $(TESTTREE)
 
 test.md5: test.tar
 	openssl md5 < test.tar > test.md5

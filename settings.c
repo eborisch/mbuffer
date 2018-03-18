@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2017, Thomas Maier-Komor
+ *  Copyright (C) 2000-2018, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -39,10 +39,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#ifdef __FreeBSD__
-#include <sys/sysctl.h>
-#endif
-
 
 typedef enum { off, on, invalid } flag_t;
 
@@ -66,9 +62,13 @@ unsigned int
 	NumVolumes = 1,		/* number of input volumes, 0 for interactive prompting */
 	AutoloadTime = 0;
 
+long
+	AvP = 0,		/* available pages */
+	NumP = 0;		/* total number of physical pages */
+
 unsigned long
-	NumP = 0,
 	Timeout = 0,
+	Numblocks = 512,	/* number of buffer blocks */
 	Outsize = 10240;
 
 unsigned long long
@@ -78,9 +78,6 @@ unsigned long long
 	Totalmem = 0,
 	OutVolsize = 0,
 	Pause = 0;
-
-signed long
-	Numblocks = 512;	/* number of buffer blocks */
 
 float	StatusInterval = 0.5;	/* status update interval time */
 
@@ -239,24 +236,27 @@ void readConfigFile(const char *cfname)
 		line = nl;
 		debugmsg("parsing key/value pair %s=%s\n",key,valuestr);
 		if (strcasecmp(key,"numblocks") == 0) {
+			errno = 0;
 			long nb = strtol(valuestr,0,0);
-			if ((nb == 0) && (errno == EINVAL)) {
+			if ((nb <= 0) && (errno != 0)) {
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			} else {
 				Numblocks = nb;
 				debugmsg("Numblocks = %llu\n",Numblocks);
 			}
 		} else if (strcasecmp(key,"pause") == 0) {
+			errno = 0;
 			long long p = strtoll(valuestr,0,0);
-			if ((p == 0) && (errno == EINVAL)) {
+			if ((p <= 0) || (errno != 0)) {
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			} else {
 				Pause = p;
 				debugmsg("Pause = %lldusec\n",Pause);
 			}
 		} else if (strcasecmp(key,"autoloadtime") == 0) {
+			errno = 0;
 			long at = strtol(valuestr,0,0) - 1;
-			if ((at == 0) && (errno == EINVAL)) {
+			if ((at <= 0) && (errno != 0)) {
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			} else if ((at < 0) || (at > UINT_MAX)) {
 				warningmsg("ignoring invalid value for %s: \"%s\"\n",key,valuestr);
@@ -271,6 +271,8 @@ void readConfigFile(const char *cfname)
 			if ((sr <= 1) && (sr > 0)) {
 				StartRead = sr;
 				debugmsg("StartRead = %1.2lf\n",StartRead);
+			} else {
+				warningmsg("ignoring invalid value '%s' for %s\n",valuestr,key);
 			}
 		} else if (strcasecmp(key,"startwrite") == 0) {
 			double sw = 0;
@@ -279,10 +281,13 @@ void readConfigFile(const char *cfname)
 			if ((sw <= 1) && (sw > 0)) {
 				StartWrite = sw;
 				debugmsg("StartWrite = %1.2lf\n",StartWrite);
+			} else {
+				warningmsg("ignoring invalid value '%s' for %s\n",valuestr,key);
 			}
 		} else if (strcasecmp(key,"timeout") == 0) {
+			errno = 0;
 			long t = strtol(valuestr,0,0);
-			if (((t == 0) && (errno == EINVAL)) || (t < 0)) 
+			if ((t < 0) || (errno != 0)) 
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			else {
 				Timeout = t;
@@ -352,8 +357,13 @@ void readConfigFile(const char *cfname)
 				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
 			}
 		} else if (strcasecmp(key,"StatusInterval") == 0) {
-			StatusInterval = strtof(valuestr,0);
-			debugmsg("StatusInterval = %f\n",StatusInterval);
+			float itv;
+			if ((1 == sscanf(valuestr,"%f",&itv)) && (itv > 0)) {
+				StatusInterval = itv;
+				debugmsg("StatusInterval = %f\n",StatusInterval);
+			} else {
+				warningmsg("invalid argument for %s: \"%s\"\n",key,valuestr);
+			}
 		} else if (strcasecmp(key,"verbose") == 0) {
 			setVerbose(valuestr);
 		} else {
@@ -392,30 +402,31 @@ void readConfigFile(const char *cfname)
 }
 
 
-void initBuffer()
+long maxSemValue()
 {
-	int c = 0;
-	long mxnrsem;
-
-	/* check that we stay within system limits */
-#ifdef __FreeBSD__
-	size_t semvmx_size = sizeof(mxnrsem);
-	if (sysctlbyname("kern.ipc.semvmx", &mxnrsem, &semvmx_size, 0, 0) == -1)
-		mxnrsem = -1;
-#else
-	mxnrsem = sysconf(_SC_SEM_VALUE_MAX);
-#endif
+	long mxnrsem = sysconf(_SC_SEM_VALUE_MAX);
 	if (-1 == mxnrsem) {
 #ifdef SEM_MAX_VALUE
 		mxnrsem = SEM_MAX_VALUE;
 #else
-		mxnrsem = LONG_MAX;
+		mxnrsem = UINT8_MAX;
 		warningmsg("unable to determine maximum value of semaphores\n");
 #endif
 	}
-	if (Numblocks > mxnrsem)
-		fatal("cannot allocate more than %d blocks.\nThis is a system dependent limit, depending on the maximum semaphore value.\nPlease choose a bigger block size.\n",mxnrsem);
+	return mxnrsem;
+}
 
+
+void initBuffer()
+{
+	int c;
+	/* check that we stay within system limits */
+	if (Numblocks > maxSemValue())
+		fatal("cannot allocate more than %d blocks.\nThis is a system dependent limit, depending on the maximum semaphore value.\nPlease choose a bigger block size.\n",maxSemValue());
+	if (Numblocks > 10000)
+		warningmsg("high value of number of blocks(%lu): increase block size for better performance\n",Numblocks);
+	if ((AvP != 0) && (((AvP * PgSz) / 2) < (Numblocks * Blocksize)))
+		warningmsg("allocating more than half of available memory\n");
 	if ((Blocksize * (long long)Numblocks) > (long long)SSIZE_MAX)
 		fatal("Cannot address so much memory (%lld*%d=%lld>%lld).\n",Blocksize,Numblocks,Blocksize*(long long)Numblocks,(long long)SSIZE_MAX);
 	/* create buffer */
@@ -449,6 +460,7 @@ void initBuffer()
 		/* resize the file. Needed - at least under linux, who knows why? */
 		if (-1 == lseek(Tmp,Numblocks * Blocksize - sizeof(int),SEEK_SET))
 			fatal("could not resize temporary file: %s\n",strerror(errno));
+		c = 0;
 		if (-1 == write(Tmp,&c,sizeof(c)))
 			fatal("could not resize temporary file: %s\n",strerror(errno));
 		Buffer[0] = mmap(0,Blocksize*Numblocks,PROT_READ|PROT_WRITE,MAP_SHARED,Tmp,0);
@@ -456,7 +468,11 @@ void initBuffer()
 			fatal("could not map buffer-file to memory: %s\n",strerror(errno));
 		debugmsg("temporary file mapped to address %p\n",Buffer[0]);
 	} else {
-		infomsg("allocating memory for %d blocks with %llu byte (%llu kB total)...\n",Numblocks,(unsigned long long) Blocksize,(unsigned long long) ((Numblocks*Blocksize) >> 10));
+		infomsg("allocating memory for %d blocks with %llu %s (%llu kB total)...\n"
+			,Numblocks
+			,Blocksize & 0x3ff ? Blocksize : (Blocksize >> 10)
+			,Blocksize & 0x3ff ? "bytes" : "kB"
+			,(unsigned long long)((Numblocks*Blocksize) >> 10));
 		Buffer[0] = (char *) valloc(Blocksize * Numblocks);
 		if (Buffer[0] == 0)
 			fatal("Could not allocate enough memory (%lld requested): %s\n",(unsigned long long)Blocksize * Numblocks,strerror(errno));
@@ -512,7 +528,7 @@ static void version(void)
 {
 	(void) fprintf(stderr,
 		"mbuffer version "PACKAGE_VERSION"\n"\
-		"Copyright 2001-2017 - T. Maier-Komor\n"\
+		"Copyright 2001-2018 - T. Maier-Komor\n"\
 		"License: GPLv3 - see file LICENSE\n"\
 		"This program comes with ABSOLUTELY NO WARRANTY!!!\n"
 		"Donations via PayPal to thomas@maier-komor.de are welcome and support this work!\n"

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2017, Thomas Maier-Komor
+ *  Copyright (C) 2000-2018, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -46,13 +46,14 @@ extern unsigned int
 	NumVolumes,	/* number of volumes to expect while reading */
 	AutoloadTime;	/* time to wait after an autoload command */
 
+extern long
+	AvP,
+	NumP;
+
 extern unsigned long
-	NumP,
+	Numblocks,		/* number of buffer blocks */
 	Timeout,
 	Outsize;
-
-extern signed long
-	Numblocks;		/* number of buffer blocks */
 
 extern unsigned long long
 	Blocksize,		/* fundamental I/O block size */
@@ -81,5 +82,6 @@ void readConfigFile(const char *cfname);
 void initBuffer();
 void searchOptionV(int argc, const char **argv);
 int parseOption(int c, int argc, const char **argv);
+long maxSemValue();
 
 #endif

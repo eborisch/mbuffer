@@ -341,7 +341,7 @@ void *inputThread(void *ignored)
 #endif
 	(void) clock_gettime(ClockSrc,&last);
 	assert(ignored == 0);
-	infomsg("inputThread: starting with threadid %ld...\n",(long)pthread_self());
+	infomsg("inputThread: starting with threadid 0x%lx...\n",(long)pthread_self());
 	for (;;) {
 		int err;
 
