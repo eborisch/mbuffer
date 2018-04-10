@@ -17,7 +17,7 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "config.h"
+#include "mbconf.h"
 
 #ifdef S_SPLINT_S
 #ifdef __CYGWIN__
@@ -563,7 +563,7 @@ static int requestOutputVolume(int out, const char *outfile)
 			err = pthread_mutex_unlock(&TermMut);
 			assert(0 == err);
 		}
-		mode = O_WRONLY|O_TRUNC|OptSync|LARGEFILE|Direct;
+		mode = O_WRONLY|O_TRUNC|OptSync|O_LARGEFILE|Direct;
 		if (strncmp(outfile,"/dev/",5))
 			mode |= O_CREAT;
 		out = open(outfile,mode,0666);
@@ -858,7 +858,7 @@ static void openDestinationFiles(dest_t *d)
 				d->mode &= ~O_EXCL;
 			d->fd = open(d->arg,d->mode,0666);
 			if ((-1 == d->fd) && (errno == EINVAL)) {
-				d->mode &= ~LARGEFILE;
+				d->mode &= ~O_LARGEFILE;
 				d->fd = open(d->arg,d->mode,0666);
 			}
 			if ((-1 == d->fd) && (errno == EINVAL)) {
@@ -950,6 +950,15 @@ static void initDefaults()
 	/* gather system parameters */
 	TickTime = 1000000 / sysconf(_SC_CLK_TCK);
 
+	/* get page size */
+#ifdef _SC_PAGESIZE
+	PgSz = sysconf(_SC_PAGESIZE);
+	if (PgSz < 0) {
+		warningmsg("unable to determine system pagesize: %s\n",strerror(errno));
+		PgSz = 0;
+	}
+#endif
+
 	/* get physical memory size */
 #if defined(_SC_PHYS_PAGES)
 	NumP = sysconf(_SC_PHYS_PAGES);
@@ -963,7 +972,25 @@ static void initDefaults()
 
 	/* get number of available free pages */
 	AvP = 0;
-#if defined(_SC_AVPHYS_PAGES)
+#if defined(__linux)
+	int pm = open("/proc/meminfo",O_RDONLY);
+	if (pm != -1) {
+		char tmp[4096];
+		int n = read(pm,tmp,sizeof(tmp));
+		if (n > 0) {
+			char *at = strstr(tmp,"MemAvailable:");
+			if (at) {
+				AvP = strtol(at+13,0,0);
+				AvP <<= 10;
+				AvP /= PgSz;
+				debugmsg("available memory: %lu pages\n",AvP);
+			}
+		}
+		close(pm);
+	}
+	if (AvP == 0)
+		warningmsg("unable to determine amount of available memory");
+#elif defined(_SC_AVPHYS_PAGES)
 	AvP = sysconf(_SC_AVPHYS_PAGES);
 	if (AvP < 0) {
 		warningmsg("unable to determine number of available pages: %s\n",strerror(errno));
@@ -980,18 +1007,14 @@ static void initDefaults()
 #else
 	warningmsg("no mechanism to determine number of available pages\n",strerror(errno));
 #endif
-	if (AvP)
-		debugmsg("Available memory (in pages): %li\n",AvP);
-
-#ifdef _SC_PAGESIZE
-	PgSz = sysconf(_SC_PAGESIZE);
-	if (PgSz < 0) {
-		warningmsg("unable to determine system pagesize: %s\n",strerror(errno));
-		PgSz = 0;
+	if (AvP && PgSz) {
+		debugmsg("available memory: %llukB / %li pages\n",((long long unsigned)AvP*(long long unsigned)PgSz)>>10,AvP);
+	} else if (AvP) {
+		debugmsg("available memory: %li pages\n",AvP);
 	}
-#endif
 
 	if (NumP && PgSz) {
+		debugmsg("virtual memory: %llukB / %li pages\n",((long long unsigned)NumP*(long long unsigned)PgSz)>>10,NumP);
 		Blocksize = PgSz;
 		debugmsg("Blocksize set to physical page size of %ld bytes\n",PgSz);
 		Numblocks = NumP/50;

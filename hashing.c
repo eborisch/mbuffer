@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2017, Thomas Maier-Komor
+ *  Copyright (C) 2000-2018, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -17,13 +17,15 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "config.h"
+#include "mbconf.h"
+#include "hashing.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/types.h>
 
 #if defined HAVE_GCRYPT_H && defined HAVE_LIBGCRYPT
 #include <gcrypt.h>
@@ -33,28 +35,19 @@
 #define USE_MHASH 1
 #elif defined HAVE_LIBMD5 && defined HAVE_MD5_H
 #include <md5.h>
-static MD5_CTX MD5ctxt;
 #define MD5_INIT(ctxt)		MD5Init(&ctxt);
 #define MD5_UPDATE(ctxt,at,num) MD5Update(&ctxt,(unsigned char *)(at),(unsigned int)(num))
 #define MD5_END(hash,ctxt)	MD5Final(hash,&(ctxt))
 #elif defined HAVE_LIBCRYPTO
 #include <openssl/md5.h>
-static MD5_CTX MD5ctxt;
 #define MD5_INIT(ctxt)		MD5_Init(&ctxt);
 #define MD5_UPDATE(ctxt,at,num)	MD5_Update(&ctxt,at,num)
 #define MD5_END(hash,ctxt)	MD5_Final(hash,&(ctxt))
 #endif
 
 #include "dest.h"
-#include "hashing.h"
 #include "log.h"
-
-
-extern volatile int
-	SendSize,
-	Terminate;	/* abort execution, because of error or signal */
-extern dest_t *Dest;
-extern char *volatile SendAt;
+#include "globals.h"
 
 int syncSenders(char *b, int s);
 
@@ -122,9 +115,9 @@ int addHashAlgorithm(const char *name)
 	debugmsg("enabled hash algorithm %s\n",name);
 	return 1;
 #else
-#if defined USE_MHASH
-	int algo = 0;
 	char *algoname = "";
+	int algo = 0;
+#if defined USE_MHASH
 	int numalgo = mhash_count();
 
 	while (algo <= numalgo) {
@@ -132,12 +125,11 @@ int addHashAlgorithm(const char *name)
 		if (algoname && (strcasecmp(algoname,name) == 0))
 			break;
 		free(algoname);
-		algoname = 0;
+		algoname = "";
 		++algo;
 	}
 #elif defined HAVE_MD5
-	int algo = 0;
-	char *algoname = strdup("MD5");
+	algoname = strdup("MD5");
 #endif
 	if (strcasecmp(algoname,name) != 0) {
 		errormsg("invalid or unsupported hash function %s\n",name);
@@ -152,12 +144,11 @@ int addHashAlgorithm(const char *name)
 
 void *hashThread(void *arg)
 {
-#if defined USE_GCRYPT
 	dest_t *dest = (dest_t *) arg;
+#if defined USE_GCRYPT
 	gcry_md_hd_t hd;
 	gcry_md_open(&hd, dest->mode, 0);
 #elif defined HAVE_MD5	/*************** md5 ***************/
-	dest_t *dest = (dest_t *) arg;
 #ifdef USE_MHASH
 	int algo = dest->mode;
 
@@ -165,6 +156,7 @@ void *hashThread(void *arg)
 	MHASH ctxt = mhash_init(algo);
 	assert(ctxt != MHASH_FAILED);
 #else
+	MD5_CTX MD5ctxt;
 	MD5_INIT(MD5ctxt);
 #endif
 #endif
@@ -175,7 +167,7 @@ void *hashThread(void *arg)
 		(void) syncSenders(0,0);
 		size = SendSize;
 		if (0 == size) {
-			size_t ds;
+			size_t ds,al;
 			unsigned char hashvalue[128];
 			char *msg, *m;
 			const char *an;
@@ -184,27 +176,34 @@ void *hashThread(void *arg)
 			debugmsg("hashThread(): done.\n");
 #if defined USE_GCRYPT
 			ds = gcry_md_get_algo_dlen(dest->mode);
+			assert(sizeof(hashvalue) >= ds);
 			an = gcry_md_algo_name(dest->mode);
 			memcpy(hashvalue,gcry_md_read(hd,dest->mode),ds);
 #elif defined USE_MHASH
+			ds = mhash_get_block_size(algo);
+			assert(sizeof(hashvalue) >= ds);
 			mhash_deinit(ctxt,hashvalue);
 			an = (const char *) mhash_get_hash_name_static(algo);
-			ds = mhash_get_block_size(algo);
-#else
+#elif defined HAVE_MD5
+			ds = 16;
 			MD5_END(hashvalue,MD5ctxt);
 			an = "md5";
-			ds = 16;
+#else
+			ds = 0;
+			an = "";
+			assert(0);
 #endif
-			assert(sizeof(hashvalue) >= ds);
-			m = msg = malloc(300);
-			m += snprintf(m,300,"%s hash: ",an);
+			al = strlen(an);
+			// 9 = strlen(" hash: ") + \n + \0
+			msg = malloc(al+9+(ds<<1));
+			assert(msg);
+			memcpy(msg,an,al);
+			memcpy(msg+al," hash: ",7);
+			m = msg + al + 7;
 			for (i = 0; i < ds; ++i)
-				m += snprintf(m,300-(m-msg),"%02x",(unsigned int)hashvalue[i]);
-			if (m-msg < 300-2) {
-				*m++ = '\n';
-				*m = 0;
-			} else 
-				msg[299] = 0;
+				m += sprintf(m,"%02x",(unsigned int)hashvalue[i]);
+			*m++ = '\n';
+			*m = 0;
 			dest->result = msg;
 			pthread_exit((void *) msg);
 			return 0;	/* for lint */
@@ -219,7 +218,7 @@ void *hashThread(void *arg)
 		gcry_md_write(hd,SendAt,size);
 #elif defined USE_MHASH
 		mhash(ctxt,SendAt,size);
-#else
+#elif defined HAVE_MD5
 		MD5_UPDATE(MD5ctxt,SendAt,size);
 #endif
 	}

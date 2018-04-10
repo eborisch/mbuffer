@@ -1,3 +1,15 @@
+20180410:
+- build fix for hashing library variants
+- support tapetest on systems with name variants of open and write
+- run only network tests for supported address families
+  (patch supplied by Peter Pentchev)
+- code update for hashing infrastructure
+- make idev tests usable on more platforms
+- determine amount of available memory via procfs
+- option -d unintentionally consumes an argument
+- idev.c should use libc's names
+- support use of autoreconf
+
 20180318:
 - performance optimized defaults
 - stricter arguments checking of mbuffer.rc

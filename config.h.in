@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2000-2009, Thomas Maier-Komor
+ *  Copyright (C) 2000-2018, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -83,51 +83,9 @@
 #undef _LARGEFILE64_SOURCE
 #undef _FILE_OFFSET_BITS
 
-#ifndef lint
-#undef restrict
-#undef inline
-#endif
-
-
-/* derived configuration defines */
-#include <assert.h>
-#include <fcntl.h>
-#include <limits.h>
-#include <semaphore.h>
-#include <unistd.h>
-
-#ifdef O_LARGEFILE
-#define LARGEFILE O_LARGEFILE
-#else
-#define LARGEFILE 0
-#endif
-
-#ifdef O_DIRECT
-#define DIRECT O_DIRECT
-#else
-#define DIRECT 0
-#endif
-
-#ifndef PATH_MAX
-#define PATH_MAX 1024
-#endif
-
-#ifndef S_SPLINT_S
-#ifndef _POSIX_SEMAPHORES
-#error posix sempahores are required
-#endif
-#endif
-
-#ifdef __CYGWIN__
-#include <malloc.h>
-#undef assert
-#define assert(x) ((x) || (*(char *) 0 = 1))
-#endif
-
-#ifdef __FreeBSD__
-#include <sys/sysctl.h>
-#endif
-
-#define _GNU_SOURCE 1	/* needed for O_DIRECT */
+#undef LIBC_OPEN
+#undef LIBC_READ
+#undef LIBC_WRITE
+#undef LIBC_FSTAT
 
 #endif

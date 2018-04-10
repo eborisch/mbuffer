@@ -17,7 +17,7 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "config.h"
+#include "mbconf.h"
 #include "dest.h"
 #include "hashing.h"
 #include "network.h"
@@ -203,9 +203,10 @@ void readConfigFile(const char *cfname)
 	if (cfdata == 0)
 		fatal("out of memory\n");
 	int n = read(df,cfdata,st.st_size);
+	const int save_errno = errno;
 	close(df);
 	if (n < 0) {
-		warningmsg("error reading %s: %s\n",cfname,strerror(errno));
+		warningmsg("error reading %s: %s\n",cfname,strerror(save_errno));
 		free(cfdata);
 		return;
 	}
@@ -448,7 +449,7 @@ void initBuffer()
 			Tmp = mkstemp(Tmpfile);
 			infomsg("tmpfile is %s\n",Tmpfile);
 		} else {
-			mode_t mode = O_RDWR | LARGEFILE;
+			mode_t mode = O_RDWR | O_LARGEFILE;
 			if (strncmp(Tmpfile,"/dev/",5))
 				mode |= O_CREAT|O_EXCL;
 			Tmp = open(Tmpfile,mode,0600);
@@ -733,7 +734,7 @@ int parseOption(int c, int argc, const char **argv)
 	} else if (!strcmp("--tapeaware",argv[c])) {
 		TapeAware = 1;
 		debugmsg("sensing early end-of-tape warning\n");
-	} else if (!argcheck("-d",argv,&c,argc)) {
+	} else if (!strcmp("-d",argv[c])) {
 #ifdef HAVE_STRUCT_STAT_ST_BLKSIZE
 		SetOutsize = 1;
 		debugmsg("setting output size according to the blocksize of the device\n");
@@ -786,7 +787,7 @@ int parseOption(int c, int argc, const char **argv)
 			dest->arg = argv[c];
 			dest->name = argv[c];
 			dest->fd = -1;
-			dest->mode = O_CREAT|O_WRONLY|OptMode|Direct|LARGEFILE|OptSync;
+			dest->mode = O_CREAT|O_WRONLY|OptMode|Direct|O_LARGEFILE|OptSync;
 		} else {
 			dest_t *d = Dest;
 			while (d) {
@@ -837,7 +838,7 @@ int parseOption(int c, int argc, const char **argv)
 		Memmap = 1;
 		debugmsg("Memmap = 1\n");
 	} else if (!argcheck("-l",argv,&c,argc)) {
-		Log = open(argv[c],O_WRONLY|O_APPEND|O_TRUNC|O_CREAT|LARGEFILE,0666);
+		Log = open(argv[c],O_WRONLY|O_APPEND|O_TRUNC|O_CREAT|O_LARGEFILE,0666);
 		if (-1 == Log) {
 			Log = STDERR_FILENO;
 			errormsg("error opening log file: %s\n",strerror(errno));
@@ -943,6 +944,8 @@ int parseOption(int c, int argc, const char **argv)
 		printmsg("PID is %d\n",pid);
 		int n = snprintf(0,0,"%s (%d): ",argv[0],pid);
 		Prefix = realloc(Prefix,n+1);
+		if (Prefix == NULL)
+			fatal("out of memory allocating the prefix string");
 		snprintf(Prefix,n+1,"%s (%d): ",argv[0],pid);
 		PrefixLen = n;
 	} else if (!argcheck("-D",argv,&c,argc)) {

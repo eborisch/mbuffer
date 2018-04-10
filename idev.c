@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017, Thomas Maier-Komor
+ *  Copyright (C) 2017-2018, Thomas Maier-Komor
  *
  *  This is the source code of mbuffer.
  *
@@ -17,35 +17,61 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define _GNU_SOURCE
+#include "mbconf.h"
 #include <assert.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-ssize_t (*d_open)(const char *path, int oflag, int mode) = 0;
+#define EXPAND(A) A ## 1
+#define ISEMPTY(A) EXPAND(A)
+
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+
+#if ISEMPTY(LIBC_FSTAT)
+#undef LIBC_FSTAT
+#define LIBC_FSTAT fstat
+#endif
+
+
+ssize_t (*d_open)(const char *path, int oflag, ...) = 0;
 ssize_t (*d_read)(int filedes, void *buf, size_t nbyte) = 0;
-int (*d_fstat)(int ver, int fd, struct stat *st) = 0;
+int (*d_fxstat)(int ver, int fd, struct stat *st) = 0;
+int (*d_fstat)(int fd, struct stat *st) = 0;
 
-ssize_t Fd = -1;
-size_t BSize = 0;
+static ssize_t Fd = -1;
+static size_t BSize = 0;
+static const char *IDEV = "";
 
 
-
-int open(const char *path, int oflag, int mode)
+int open(const char *path, int oflag, ...)
 {
 	if (d_open == 0) {
-		d_open = (ssize_t (*)(const char *,int,int)) dlsym(RTLD_NEXT, "open");
+		d_open = (ssize_t (*)(const char *,int,...)) dlsym(RTLD_NEXT,TOSTRING(LIBC_OPEN));
 		fprintf(stderr,"idev.so: d_open = %p\n",d_open);
 		fflush(stderr);
+		const char *idev = getenv("IDEV");
+		if (idev)
+			IDEV = idev;
 	}
 	assert(d_open);
-	int fd = d_open(path, oflag, mode);
-	fprintf(stderr,"idev.so: open %s (%s)\n",path,getenv("IDEV"));
+	int fd;
+	if (oflag & O_CREAT) {
+		va_list val;
+		va_start(val,oflag);
+		int mode = va_arg(val,int);
+		va_end(val);
+		fd = d_open(path, oflag, mode);
+	} else {
+		fd = d_open(path, oflag);
+	}
+	fprintf(stderr,"idev.so: open(%s,0x%x,...) = %d (IDEV='%s')\n",path,oflag,fd,IDEV);
 	if (strcmp(path, getenv("IDEV")) == 0) {
 		fprintf(stderr,"idev.so: FD = %d\n",fd);
 		fflush(stderr);
@@ -55,8 +81,7 @@ int open(const char *path, int oflag, int mode)
 }
 
 
-
-ssize_t read(int fd,void *buf, size_t s)
+ssize_t LIBC_READ(int fd, void *buf, size_t s)
 {
 	if (d_read == 0) {
 		d_read = (ssize_t (*)(int,void*,size_t)) dlsym(RTLD_NEXT, "read");
@@ -68,7 +93,7 @@ ssize_t read(int fd,void *buf, size_t s)
 	if (BSize == 0)
 		BSize = strtol(getenv("BSIZE"),0,0);
 	if (s < BSize) {
-		fprintf(stderr,"idev.so: read(%d,%p,%lu<%lu) = ENOMEM\n",fd,buf,s,BSize);
+		fprintf(stderr,"idev.so: read(%d,%p,%llu<%llu) = ENOMEM\n",fd,buf,(long long unsigned)s,(long long unsigned)BSize);
 		fflush(stderr);
 		errno = ENOMEM;
 		return -1;
@@ -79,17 +104,39 @@ ssize_t read(int fd,void *buf, size_t s)
 
 int __fxstat(int ver, int fd, struct stat *st)
 {
-	fprintf(stderr,"idev.so: fstat(%d,%d,%p)\n",ver,fd,st);
-	if (d_fstat == 0) {
-		d_fstat = (int (*)(int,int,struct stat *)) dlsym(RTLD_NEXT, "__fxstat");
+	fprintf(stderr,"idev.so: __fxstat(%d,%d,%p)\n",ver,fd,st);
+	if (d_fxstat == 0) {
+		d_fxstat = (int (*)(int,int,struct stat *)) dlsym(RTLD_NEXT, "__fxstat");
 		fprintf(stderr,"idev.so: d_fstat = %p\n",d_fstat);
 	}
-	assert(d_fstat);
-	int r = d_fstat(ver,fd,st);
+	assert(d_fxstat);
+	int r = d_fxstat(ver,fd,st);
 	if (fd == Fd) {
 		if (BSize == 0)
 			BSize = strtol(getenv("BSIZE"),0,0);
-		fprintf(stderr,"idev.so: blksize set to %lu\n",BSize);
+		fprintf(stderr,"idev.so: blksize set to %llu\n",(long long unsigned)BSize);
+		fflush(stderr);
+		st->st_blksize = BSize;
+		st->st_mode &= ~S_IFMT;
+		st->st_mode |= S_IFCHR;
+	}
+	return r;
+}
+
+
+int LIBC_FSTAT(int fd, struct stat *st)
+{
+	fprintf(stderr,"idev.so: fstat(%d,%p)\n",fd,st);
+	if (d_fstat == 0) {
+		d_fstat = (int (*)(int,struct stat *)) dlsym(RTLD_NEXT, "__fxstat");
+		fprintf(stderr,"idev.so: d_fstat = %p\n",d_fstat);
+	}
+	assert(d_fstat);
+	int r = d_fstat(fd,st);
+	if (fd == Fd) {
+		if (BSize == 0)
+			BSize = strtol(getenv("BSIZE"),0,0);
+		fprintf(stderr,"idev.so: blksize set to %llu\n",(long long unsigned)BSize);
 		fflush(stderr);
 		st->st_blksize = BSize;
 		st->st_mode &= ~S_IFMT;

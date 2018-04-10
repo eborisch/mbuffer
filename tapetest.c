@@ -35,12 +35,26 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define _GNU_SOURCE
+#include "mbconf.h"	// defines _GNU_SOURCE
+
+#define __USE_GNU	// for RTLD_NEXT
 #include <dlfcn.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+#define EXPAND(A) A ## 1
+#define ISEMPTY(A) EXPAND(A)
+
+#if !defined(LIBC_OPEN) || (ISEMPTY(LIBC_OPEN) == 1)
+#error name of libc open() could not be determined - test cannot be performed
+#endif
+
+#if !defined(LIBC_WRITE) || (ISEMPTY(LIBC_WRITE) == 1)
+#error name of libc write() could not be determined - test cannot be performed
+#endif
 
 /* Block number where we start signalling imminent end of tape */
 #define EARLY_END_BLOCK 5
@@ -48,22 +62,29 @@
 /* Block number where we indicate we have reached the end of the tape */
 #define FINAL_END_BLOCK 10
 
-typedef ssize_t (*orig_open_f_type)(const char *path, int oflag, int mode);
-typedef ssize_t (*orig_write_f_type)(int filedes, const void *buf, size_t nbyte);
+typedef int (*open_func_t)(const char *path, int oflag, ...);
+typedef ssize_t (*write_func_t)(int filedes, const void *buf, size_t nbyte);
 
-int block = 0;     /* Current block */
-int toggle = 0;    /* Used to return ENOSPC for every other write() */
-int file = -1;     /* File handle we are intercepting */
-int opencount = 0; /* Number of calls made to open() */
+static int block = 0;     /* Current block */
+static int toggle = 0;    /* Used to return ENOSPC for every other write() */
+static int file = -1;     /* File handle we are intercepting */
+static int opencount = 0; /* Number of calls made to open() */
+static open_func_t orig_open = 0;
+static write_func_t orig_write = 0;
 
-int open(const char *path, int oflag, int mode)
+int LIBC_OPEN(const char *path, int oflag, ...)
 {
 	int fd;
 	char newpath[256];
-	orig_open_f_type orig_open;
-	orig_open = (orig_open_f_type)dlsym(RTLD_NEXT, "open");
-	printf("[INTERCEPT] open: %s", path);
+	va_list val;
+	va_start(val,oflag);
+	int mode = va_arg(val,int);
+	va_end(val);
+	if (0 == orig_open) {
+		orig_open = (open_func_t)dlsym(RTLD_NEXT, "open");
+	}
 	if (strncmp(path, "output", 6) == 0) {
+		printf("[INTERCEPT] open: %s", path);
 		/* Opening a file that starts with "output", this is the one we will
 		   intercept. */
 
@@ -87,10 +108,12 @@ int open(const char *path, int oflag, int mode)
 	return fd;
 }
 
-ssize_t write(int filedes, const void *buf, size_t nbyte)
+
+ssize_t LIBC_WRITE(int filedes, const void *buf, size_t nbyte)
 {
-	orig_write_f_type orig_write;
-	orig_write = (orig_write_f_type)dlsym(RTLD_NEXT, "write");
+	if (0 == orig_write) {
+		orig_write = (write_func_t)dlsym(RTLD_NEXT, "write");
+	}
 	if (filedes == file) {
 		printf("[INTERCEPT] write(block %d): ", block);
 		if (block >= FINAL_END_BLOCK) {
@@ -111,3 +134,4 @@ ssize_t write(int filedes, const void *buf, size_t nbyte)
 	}
 	return orig_write(filedes, buf, nbyte);
 }
+

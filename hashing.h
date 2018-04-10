@@ -20,12 +20,14 @@
 #ifndef HASHING_H
 #define HASHING_H
 
-#ifdef HAVE_LIBMHASH
-#define HAVE_MD5 1
+#if defined HAVE_GCRYPT_H && defined HAVE_LIBGCRYPT
+#define HAVE_MD5
+#elif defined HAVE_MHASH_H && defined HAVE_LIBMHASH
+#define HAVE_MD5
 #elif defined HAVE_LIBMD5 && defined HAVE_MD5_H
-#define HAVE_MD5 1
+#define HAVE_MD5
 #elif defined HAVE_LIBCRYPTO
-#define HAVE_MD5 1
+#define HAVE_MD5
 #endif
 
 int addHashAlgorithm(const char *name);

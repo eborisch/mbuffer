@@ -17,7 +17,7 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "config.h"
+#include "mbconf.h"
 #include "input.h"
 #include "common.h"
 #include "log.h"
@@ -165,7 +165,7 @@ static int requestInputVolume()
 			if (0 == promptInteractive())
 				return 0;
 		}
-		In = open(Infile, O_RDONLY | LARGEFILE | Direct);
+		In = open(Infile, O_RDONLY | O_LARGEFILE | Direct);
 		if ((-1 == In) && (errno == EINVAL))
 			In = open(Infile, O_RDONLY | Direct);
 		if (-1 == In)
@@ -191,11 +191,11 @@ void openInput()
 {
 	if (Infile) {
 		debugmsg("opening input %s\n",Infile);
-		int flags = O_RDONLY | LARGEFILE | Direct;
+		int flags = O_RDONLY | O_LARGEFILE | Direct;
 		In = open(Infile,flags);
 		if (-1 == In) {
 			if (errno == EINVAL) {
-				flags &= ~LARGEFILE;
+				flags &= ~O_LARGEFILE;
 				In = open(Infile,flags);
 			}
 			if (-1 == In)
