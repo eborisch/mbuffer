@@ -1,3 +1,11 @@
+20180505:
+- fix typo in summary
+- fix potential hang with small input size
+- testing fix for BSD
+- configure enhancement: objdump may be named gobjdump
+- fix tape end of file marker may be ignored
+- removed obsolete alpha code
+
 20180410:
 - build fix for hashing library variants
 - support tapetest on systems with name variants of open and write

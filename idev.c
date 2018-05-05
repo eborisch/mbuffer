@@ -48,9 +48,10 @@ int (*d_fstat)(int fd, struct stat *st) = 0;
 static ssize_t Fd = -1;
 static size_t BSize = 0;
 static const char *IDEV = "";
+static int HadZero = 0;
 
 
-int open(const char *path, int oflag, ...)
+int LIBC_OPEN(const char *path, int oflag, ...)
 {
 	if (d_open == 0) {
 		d_open = (ssize_t (*)(const char *,int,...)) dlsym(RTLD_NEXT,TOSTRING(LIBC_OPEN));
@@ -76,6 +77,7 @@ int open(const char *path, int oflag, ...)
 		fprintf(stderr,"idev.so: FD = %d\n",fd);
 		fflush(stderr);
 		Fd = fd;
+		HadZero = 0;
 	}
 	return fd;
 }
@@ -90,6 +92,7 @@ ssize_t LIBC_READ(int fd, void *buf, size_t s)
 	assert(d_read);
 	if (fd != Fd) 
 		return d_read(fd,buf,s);
+	assert(HadZero == 0);
 	if (BSize == 0)
 		BSize = strtol(getenv("BSIZE"),0,0);
 	if (s < BSize) {
@@ -98,7 +101,10 @@ ssize_t LIBC_READ(int fd, void *buf, size_t s)
 		errno = ENOMEM;
 		return -1;
 	}
-	return d_read(fd,buf,s);
+	int n = d_read(fd,buf,s);
+	if (n == 0)
+		HadZero = 1;
+	return n;
 }
 
 
@@ -124,11 +130,11 @@ int __fxstat(int ver, int fd, struct stat *st)
 }
 
 
-int LIBC_FSTAT(int fd, struct stat *st)
+int fstat(int fd, struct stat *st)
 {
 	fprintf(stderr,"idev.so: fstat(%d,%p)\n",fd,st);
 	if (d_fstat == 0) {
-		d_fstat = (int (*)(int,struct stat *)) dlsym(RTLD_NEXT, "__fxstat");
+		d_fstat = (int (*)(int,struct stat *)) dlsym(RTLD_NEXT, TOSTRING(LIBC_FSTAT));
 		fprintf(stderr,"idev.so: d_fstat = %p\n",d_fstat);
 	}
 	assert(d_fstat);

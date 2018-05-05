@@ -57,9 +57,8 @@ void listHashAlgos()
 #if defined USE_GCRYPT
 	(void) fprintf(stderr,"valid hash functions of libgcrypt are:\n");
 	int algo = 1;
-	const char *name;
 	for (algo = 1; algo < 512; ++algo ) {
-		name = gcry_md_algo_name(algo);
+		const char *name = gcry_md_algo_name(algo);
 		assert(name);
 		if (name[0] != '?') {
 			assert(algo == gcry_md_map_name(name));

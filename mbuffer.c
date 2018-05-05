@@ -124,7 +124,7 @@ static void summary(unsigned long long numb, int numthreads)
 	else
 		msg += sprintf(msg,"summary: ");
 	msg += kb2str(msg,numb);
-	msg += sprintf(msg,"iByte in ");
+	msg += sprintf(msg,"Byte in ");
 	if (h > 0)
 		msg += sprintf(msg,"%dh %02dmin %04.1fsec - average of ",h,m,secs);
 	else if (m > 0)
@@ -132,7 +132,7 @@ static void summary(unsigned long long numb, int numthreads)
 	else
 		msg += sprintf(msg,"%4.1fsec - average of ",secs);
 	msg += kb2str(msg,av);
-	msg += sprintf(msg,"iB/s");
+	msg += sprintf(msg,"B/s");
 	if (EmptyCount != 0)
 		msg += sprintf(msg,", %dx empty",EmptyCount);
 	if (FullCount != 0)
@@ -225,9 +225,6 @@ static void statusThread(void)
 	tsec = (long)StatusInterval;
 	tusec = (long)((StatusInterval-tsec)*1E6);
 	debugmsg("timeout init: %f => %ld : %ld\n",StatusInterval,tsec,tusec);
-#ifdef __alpha
-	(void) mt_usleep(1000);	/* needed on alpha (stderr fails with fpe on nan) */
-#endif
 	if (TermQ[0] != -1)
 		maxfd = TermQ[0]+1;
  	while ((Numin == 0) && (Terminate == 0) && (Finish == -1)) {
@@ -286,14 +283,14 @@ static void statusThread(void)
 		b += sprintf(b,"\rin @ ");
 		b += kb2str(b,in);
 		numsender = NumSenders + MainOutOK - Hashers;
-		b += sprintf(b,"iB/s, out @ ");
+		b += sprintf(b,"B/s, out @ ");
 		b += kb2str(b, out * numsender);
 		if (numsender != 1)
-			b += sprintf(b,"iB/s, %d x ",numsender);
+			b += sprintf(b,"B/s, %d x ",numsender);
 		else
-			b += sprintf(b,"iB/s, ");
+			b += sprintf(b,"B/s, ");
 		b += kb2str(b,total);
-		b += sprintf(b,"iB total, buffer %3.0f%% full",fill);
+		b += sprintf(b,"B total, buffer %3.0f%% full",fill);
 		if (InSize != 0) {
 			double done = (double)Numout*Blocksize/(double)InSize*100;
 			b += sprintf(b,", %3.0f%% done",done);
@@ -628,7 +625,6 @@ static void *outputThread(void *arg)
 	int sendout = 1;
 #endif
 	int countENOSPC = 0, tapeEWEOM = 0; /* Early Warning End Of Media */
-	const double startwrite = StartWrite, startread = StartRead;
 	unsigned long long blocksize = Blocksize;
 	long long xfer = 0;
 	struct timespec last;
@@ -662,18 +658,18 @@ static void *outputThread(void *arg)
 	multipleSenders = (NumSenders > 0);
 	dest->result = 0;
 	out = dest->fd;
-	if (startwrite > 0) {
+	if ((StartWrite > 0) && (Finish == -1)) {
 		int err;
+		debugmsg("outputThread: delaying start until buffer reaches high watermark\n");
 		err = pthread_mutex_lock(&HighMut);
 		assert(err == 0);
-		debugmsg("outputThread: delaying start until buffer reaches high watermark\n");
 		pthread_cleanup_push(releaseLock,&HighMut);
 		err = pthread_cond_wait(&PercHigh,&HighMut);
 		assert(err == 0);
 		pthread_cleanup_pop(0);
-		debugmsg("outputThread: high watermark reached, starting...\n");
 		err = pthread_mutex_unlock(&HighMut);
 		assert(err == 0);
+		debugmsg("outputThread: high watermark reached, starting...\n");
 	} else
 		infomsg("outputThread: starting output on %s...\n",dest->arg);
 	/* initialize last to 0, because we don't want to wait initially */
@@ -682,7 +678,7 @@ static void *outputThread(void *arg)
 		unsigned long long rest = blocksize;
 		int err;
 
-		if ((startwrite > 0) && (fill <= 0)) {
+		if ((StartWrite > 0) && (fill <= 0)) {
 			assert(fill == 0);
 			err = pthread_mutex_lock(&HighMut);
 			assert(err == 0);
@@ -831,12 +827,12 @@ static void *outputThread(void *arg)
 		}
 		if (Numblocks == ++at)
 			at = 0;
-		if (startread < 1) {
+		if (StartRead < 1) {
 			err = pthread_mutex_lock(&LowMut);
 			assert(err == 0);
 			err = sem_getvalue(&Buf2Dev,&fill);
 			assert(err == 0);
-			if (((double)fill / (double)Numblocks) < startread) {
+			if (((double)fill / (double)Numblocks) < StartRead) {
 				err = pthread_cond_signal(&PercLow);
 				assert(err == 0);
 			}

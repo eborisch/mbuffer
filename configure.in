@@ -1,4 +1,4 @@
-AC_INIT([mbuffer],[20180410])
+AC_INIT([mbuffer],[20180505])
 AC_CONFIG_HEADER([config.h])
 AC_CONFIG_SRCDIR([mbuffer.c])
 AC_LANG([C])
@@ -89,7 +89,7 @@ AC_PATH_PROG(CP,cp)
 AC_PATH_PROG(MT,mt,AC_MSG_WARN(could not find the program mt - you might need this if you want autoloader support))
 AC_PATH_PROGS(TAR,[gtar tar])
 AC_PATH_PROG(AWK,awk)
-AC_PATH_PROG(OBJDUMP,objdump)
+AC_PATH_PROGS(OBJDUMP,objdump gobjdump)
 AC_TYPE_SIGNAL
 AC_SYS_LARGEFILE
 AC_STRUCT_ST_BLKSIZE
@@ -169,7 +169,7 @@ AC_LINK_IFELSE([
 	AC_DEFINE_UNQUOTED([LIBC_WRITE], $libc_write, [name of write() in libc])
 	AC_MSG_RESULT($libc_write)
 	AC_MSG_CHECKING([name of fstat() in C library])
-	libc_write=`$OBJDUMP -T conftest | $AWK '/\*UND\*/ && $NF ~ /^fstat/ { print $NF }'`
+	libc_fstat=`$OBJDUMP -T conftest | $AWK '/\*UND\*/ && $NF ~ /^fstat/ { print $NF }'`
 	AC_DEFINE_UNQUOTED([LIBC_FSTAT], $libc_fstat, [name of fstat() in libc])
 	AC_MSG_RESULT($libc_fstat)
 	],

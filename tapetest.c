@@ -37,7 +37,9 @@
 
 #include "mbconf.h"	// defines _GNU_SOURCE
 
+#ifndef __USE_GNU
 #define __USE_GNU	// for RTLD_NEXT
+#endif
 #include <dlfcn.h>
 #include <errno.h>
 #include <stdarg.h>

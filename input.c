@@ -161,9 +161,8 @@ static int requestInputVolume()
 				infomsg("waiting for drive to get ready...\n");
 				(void) sleep(AutoloadTime);
 			}
-		} else {
-			if (0 == promptInteractive())
-				return 0;
+		} else if (0 == promptInteractive()) {
+			return 0;
 		}
 		In = open(Infile, O_RDONLY | O_LARGEFILE | Direct);
 		if ((-1 == In) && (errno == EINVAL))
@@ -221,6 +220,7 @@ static int devread(unsigned at)
 {
 	static char *DevBuf = 0;
 	static size_t IFill = 0, Off = 0;
+	static int hadzero = 0;
 	int num = 0;
 	do {
 		if (IFill) {
@@ -235,13 +235,19 @@ static int devread(unsigned at)
 			if (num == Blocksize)
 				return num;
 		}
+		if (hadzero) {
+			hadzero = 0;
+			return 0;
+		}
 		ssize_t in = read(In,Buffer[at] + num,Blocksize - num);
 		debugmsg("devread %d = %d\n",Blocksize-num,in);
-		if (in > 0)
+		if (in > 0) {
 			num += in;
-		else if (in == 0)
+		} else if (in == 0) {
+			if (num)
+				hadzero = 1;
 			return num;
-		else if (in == -1) {
+		} else if (in == -1) {
 			if (errno != ENOMEM)
 				return -1;
 			if (DevBuf == 0) {
@@ -257,8 +263,11 @@ static int devread(unsigned at)
 				assert(errno != ENOMEM);
 				return -1;
 			}
-			if (i2 == 0)
+			if (i2 == 0) {
+				if (num)
+					hadzero = 1;
 				return num;
+			}
 			assert(IFill == 0);
 			IFill = i2;
 			Off = 0;
@@ -282,10 +291,11 @@ int readBlock(unsigned at)
 		debugiomsg("inputThread: read(In, Buffer[%d] + %llu, %llu) = %d\n", at, num, Blocksize - num, in);
 		if (in > 0) {
 			num += in;
-		} else if ((0 == in) && (Terminal||Autoloader) && (NumVolumes != 1)) {
+		} else if (((0 == in) || ((-1 == in) && (errno == EIO))) && (Terminal||Autoloader) && (NumVolumes != 1)) {
 			if (0 == requestInputVolume()) {
 				Finish = at;
 				Rest = num;
+				debugmsg("inputThread: last block has %llu bytes\n",num);
 				err = pthread_mutex_lock(&HighMut);
 				assert(err == 0);
 				err = sem_post(&Buf2Dev);
@@ -294,12 +304,11 @@ int readBlock(unsigned at)
 				assert(err == 0);
 				err = pthread_mutex_unlock(&HighMut);
 				assert(err == 0);
+				infomsg("inputThread: exiting...\n");
 				if (Status)
 					pthread_exit(0);
 				return 0;
 			}
-		} else if ((-1 == in) && (errno == EIO) && (Terminal||Autoloader) && (NumVolumes != 1)) {
-			requestInputVolume(at,num);
 		} else if (in <= 0) {
 			/* error or end-of-file */
 			if ((-1 == in) && (errno == EINTR))
@@ -372,8 +381,10 @@ void *inputThread(void *ignored)
 		}
 		err = sem_wait(&Dev2Buf); /* Wait for one or more buffer blocks to be free */
 		assert(err == 0);
-		if (0 == readBlock(at))
+		if (0 >= readBlock(at)) {
+			debugmsg("inputThread: no more blocks\n");
 			return 0;
+		}
 		if (MaxReadSpeed)
 			xfer = enforceSpeedLimit(MaxReadSpeed,xfer,&last);
 		err = sem_post(&Buf2Dev);

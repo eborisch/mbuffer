@@ -59,7 +59,7 @@ install: $(TARGET) $(DESTDIR)$(etcdir)/mbuffer.rc
 lint:
 	lint $(DEFS) $(SOURCES)
 
-check: $(TARGET) test0 test1 test2 test3 test4 test5
+check: $(TARGET) test0 test1 test2 test3 test4 test5 test6 test7
 
 testcleanup:
 	rm -f test0 test1 test2 test3 test4 test5 \
@@ -152,6 +152,9 @@ test5: test.md5 tapetest.so mbuffer.md5
 
 test6: mbuffer idev.so
 	LD_PRELOAD=./idev.so BSIZE=317 IDEV=mbuffer ./mbuffer -s256 -i mbuffer -f -o mbuffer2
+
+test7: mbuffer
+	./mbuffer -P90 --md5 -i INSTALL -o /dev/null
 
 tapetest.so: tapetest.c config.h
 	$(CC) $(CFLAGS) -shared -fPIC tapetest.c -o $@ $(LIBS)
