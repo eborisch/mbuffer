@@ -30,4 +30,6 @@ typedef struct destination {
 	pthread_t thread;
 } dest_t;
 
+int syncSenders(char *b, int s);
+
 #endif

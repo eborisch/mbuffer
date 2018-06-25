@@ -746,7 +746,6 @@ int parseOption(int c, int argc, const char **argv)
 		 * command line can override a config file */
 		setVerbose(argv[c]);
 	} else if (!argcheck("-u",argv,&c,argc)) {
-
 		long long p = strtoll(argv[c],0,0);
 		if ((p == 0) && (errno == EINVAL))
 			errormsg("invalid argument to option -u: \"%s\"\n",argv[c]);
@@ -788,6 +787,7 @@ int parseOption(int c, int argc, const char **argv)
 			dest->name = argv[c];
 			dest->fd = -1;
 			dest->mode = O_CREAT|O_WRONLY|OptMode|Direct|O_LARGEFILE|OptSync;
+			// ++NumSenders is done once open() in openDestinationFiles was successful
 		} else {
 			dest_t *d = Dest;
 			while (d) {
@@ -919,14 +919,10 @@ int parseOption(int c, int argc, const char **argv)
 	} else if (!strcmp("--version",argv[c]) || !strcmp("-V",argv[c])) {
 		version();
 	} else if (!strcmp("--md5",argv[c]) || !strcmp("-H",argv[c])) {
-#ifdef HAVE_MD5
 		if (addHashAlgorithm("MD5")) {
 			++Hashers;
 			++NumSenders;
 		}
-#else
-		fatal("hash calculation support has not been compiled in!\n");
-#endif
 	} else if (!strcmp("--hash",argv[c])) {
 		++c;
 		if (c == argc)

@@ -1,3 +1,6 @@
+20180625:
+- linking of available hash libraries during runtime
+
 20180505:
 - fix typo in summary
 - fix potential hang with small input size

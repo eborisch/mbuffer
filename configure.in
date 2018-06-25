@@ -1,4 +1,4 @@
-AC_INIT([mbuffer],[20180505])
+AC_INIT([mbuffer],[20180625])
 AC_CONFIG_HEADER([config.h])
 AC_CONFIG_SRCDIR([mbuffer.c])
 AC_LANG([C])
@@ -128,10 +128,6 @@ AC_ARG_ENABLE(md5,
 	,enable_md5=auto
 	)
 if test x$enable_md5 != xno ; then
-	AC_CHECK_HEADER(gcrypt.h,AC_DEFINE([HAVE_GCRYPT_H],[1],[found gcrypt.h]),)
-	AC_SEARCH_LIBS(gcry_cipher_algo_name,gcrypt,AC_DEFINE([HAVE_LIBGCRYPT], [1], [Define to 1 if you have the gcrypt library]),)
-	AC_CHECK_HEADER(mhash.h,AC_DEFINE([HAVE_MHASH_H],[1],[found mhash.h]),)
-	AC_SEARCH_LIBS(mhash_init,mhash,AC_DEFINE([HAVE_LIBMHASH], [1], [Define to 1 if you have the mhash library]),)
 	AC_SEARCH_LIBS(MD5Init,md5 md,AC_DEFINE([HAVE_LIBMD5], [1], [Define to 1 if you have the md5 library]),)
 	AC_CHECK_HEADER(md5.h,AC_DEFINE([HAVE_MD5_H],[1],[found md5.h]),)
 	AC_SEARCH_LIBS(MD5_Init,crypto,AC_DEFINE([HAVE_LIBCRYPTO], [1], [Define to 1 if you have the OpenSSL crypto library]),)

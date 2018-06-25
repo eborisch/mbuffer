@@ -365,7 +365,7 @@ int syncSenders(char *b, int s)
 
 
 
-static inline void terminateSender(int fd, dest_t *d, int ret)
+static inline void terminateSender(int fd, dest_t *d, intptr_t ret)
 {
 	debugmsg("terminating operation on %s\n",d->arg);
 	if (-1 != fd) {
@@ -388,7 +388,7 @@ static inline void terminateSender(int fd, dest_t *d, int ret)
 		ret = syncSenders(0,-1);
 		debugmsg("terminateSender(%s): sendSender(0,-1) = %d\n",d->arg,ret);
 	}
-	pthread_exit((void *)(ptrdiff_t) ret);
+	pthread_exit((void *) ret);
 }
 
 

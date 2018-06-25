@@ -34,5 +34,4 @@ int addHashAlgorithm(const char *name);
 void listHashAlgos();
 void *hashThread(void *arg);
 
-
 #endif
